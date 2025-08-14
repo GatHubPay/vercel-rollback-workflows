@@ -287,4 +287,7 @@ jobs:
             fi
           fi
           
-          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=$MESSAGE"
+          # ✅ CURL CORRIGIDO - Não falha o workflow se der erro
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE" || echo "⚠️ Notificação Telegram falhou (não crítico)"
