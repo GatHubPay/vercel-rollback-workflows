@@ -442,3 +442,187 @@ A aplicação foi automaticamente revertida para a versão anterior estável."
           else
             echo "🎉 Deploy realizado com sucesso!"
           fi
+
+  post-deploy-monitoring:
+    runs-on: ubuntu-latest
+    needs: deploy-and-guard
+    if: inputs.enablePostDeployMonitoring && needs.deploy-and-guard.outputs.rollback_executed != 'true'
+    steps:
+      - name: Monitoramento pós-deploy
+        run: |
+          echo "🔍 Iniciando monitoramento pós-deploy..."
+          echo "⏱️  Duração: ${{ inputs.monitoringDurationMinutes }} minutos"
+          echo "🔄 Intervalo: ${{ inputs.monitoringIntervalMinutes }} minutos"
+          echo "🌐 URL: ${{ needs.deploy-and-guard.outputs.deploy_url }}"
+          
+          DEPLOY_URL="${{ needs.deploy-and-guard.outputs.deploy_url }}"
+          ROUTES="${{ inputs.routes }}"
+          TIMEOUT="${{ inputs.healthCheckTimeout }}"
+          DURATION_MINUTES="${{ inputs.monitoringDurationMinutes }}"
+          INTERVAL_MINUTES="${{ inputs.monitoringIntervalMinutes }}"
+          
+          # Se não há rotas configuradas, detecta automaticamente (versão simplificada)
+          if [ -z "$ROUTES" ]; then
+            ROUTES="/"
+            # Testa rotas comuns rapidamente
+            COMMON_ROUTES="/api/health /health /login /dashboard /produtos /carrinho /checkout"
+            for route in $COMMON_ROUTES; do
+              if curl -s --connect-timeout 3 --max-time 5 -f "$DEPLOY_URL$route" > /dev/null 2>&1; then
+                ROUTES="$ROUTES,$route"
+              fi
+            done
+          fi
+          
+          # Converte para segundos
+          DURATION_SECONDS=$((DURATION_MINUTES * 60))
+          INTERVAL_SECONDS=$((INTERVAL_MINUTES * 60))
+          
+          START_TIME=$(date +%s)
+          END_TIME=$((START_TIME + DURATION_SECONDS))
+          CHECK_COUNT=1
+          CONSECUTIVE_FAILURES=0
+          MAX_CONSECUTIVE_FAILURES=2
+          
+          echo "🚀 Monitoramento iniciado às $(date)"
+          echo "🏁 Terminará às $(date -d @$END_TIME 2>/dev/null || date -r $END_TIME 2>/dev/null || echo 'em $DURATION_MINUTES minutos')"
+          
+          while [ $(date +%s) -lt $END_TIME ]; do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED_MINUTES=$(( (CURRENT_TIME - START_TIME) / 60 ))
+            REMAINING_MINUTES=$(( (END_TIME - CURRENT_TIME) / 60 ))
+            
+            echo ""
+            echo "🔍 Verificação #$CHECK_COUNT (${ELAPSED_MINUTES}m decorridos, ${REMAINING_MINUTES}m restantes)"
+            
+            FAIL=0
+            IFS=',' read -ra ARR <<< "$ROUTES"
+            
+            for path in "${ARR[@]}"; do
+              path=$(echo "$path" | xargs)
+              if [[ "$path" != /* ]]; then path="/$path"; fi
+              
+              url="${DEPLOY_URL}${path}"
+              
+              # Teste básico de conectividade
+              if ! curl -s --connect-timeout 10 --max-time $TIMEOUT -f "$url" > /dev/null 2>&1; then
+                echo "❌ Falha na conectividade: $path"
+                FAIL=1
+                continue
+              fi
+              
+              # Teste de status code
+              CODE=$(curl -s --connect-timeout 10 --max-time $TIMEOUT -o /dev/null -w "%{http_code}" "$url")
+              
+              if [ "$CODE" -ge 200 ] && [ "$CODE" -lt 400 ]; then
+                echo "✅ $path -> $CODE"
+              else
+                echo "❌ $path -> $CODE (ERRO)"
+                FAIL=1
+              fi
+            done
+            
+            # Testes adicionais de performance
+            RESPONSE_TIME=$(curl -s --connect-timeout 10 --max-time $TIMEOUT -w "%{time_total}" -o /dev/null "$DEPLOY_URL" 2>/dev/null || echo "0")
+            
+            # Verifica se resposta é muito lenta (>10s)
+            if [ $(echo "$RESPONSE_TIME > 10" | bc -l 2>/dev/null || echo "0") -eq 1 ]; then
+              echo "⚠️  Resposta lenta: ${RESPONSE_TIME}s (>10s)"
+              FAIL=1
+            else
+              echo "⚡ Tempo de resposta: ${RESPONSE_TIME}s"
+            fi
+            
+            if [ $FAIL -eq 1 ]; then
+              CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+              echo "🚨 Falha detectada! (${CONSECUTIVE_FAILURES}/${MAX_CONSECUTIVE_FAILURES} consecutivas)"
+              
+              if [ $CONSECUTIVE_FAILURES -ge $MAX_CONSECUTIVE_FAILURES ]; then
+                echo "💥 MÚLTIPLAS FALHAS CONSECUTIVAS DETECTADAS!"
+                echo "🔄 Iniciando rollback tardio automático..."
+                break
+              fi
+            else
+              echo "✅ Verificação OK"
+              CONSECUTIVE_FAILURES=0
+            fi
+            
+            CHECK_COUNT=$((CHECK_COUNT + 1))
+            
+            # Aguarda próxima verificação (se não for a última)
+            if [ $(date +%s) -lt $((END_TIME - INTERVAL_SECONDS)) ]; then
+              echo "⏳ Aguardando ${INTERVAL_MINUTES} minutos para próxima verificação..."
+              sleep $INTERVAL_SECONDS
+            fi
+          done
+          
+          # Verifica se precisa fazer rollback tardio
+          if [ $CONSECUTIVE_FAILURES -ge $MAX_CONSECUTIVE_FAILURES ]; then
+            echo "🚨 EXECUTANDO ROLLBACK TARDIO..."
+            
+            # Busca informações do projeto
+            PROJECT_INFO=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+              "https://api.vercel.com/v9/projects/${{ inputs.vercelProject }}?teamId=${{ secrets.VERCEL_TEAM_ID }}")
+            PROJECT_ID=$(echo "$PROJECT_INFO" | jq -r '.id')
+            
+            # Busca deployment anterior
+            HIST=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+              "https://api.vercel.com/v6/deployments?teamId=${{ secrets.VERCEL_TEAM_ID }}&projectId=$PROJECT_ID&limit=5&state=READY&target=production")
+            PREV_UID=$(echo "$HIST" | jq -r '.deployments[1].uid')
+            
+            if [ "$PREV_UID" != "null" ] && [ -n "$PREV_UID" ]; then
+              curl -s -X POST "https://api.vercel.com/v9/projects/$PROJECT_ID/rollback/$PREV_UID?teamId=${{ secrets.VERCEL_TEAM_ID }}" \
+                -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+                -H "Content-Type: application/json"
+              
+              echo "✅ Rollback tardio executado para deployment $PREV_UID"
+              
+              # Envia notificação de rollback tardio
+              BOT_TOKEN="8045408592:AAHtPkn2DTPTrL3rs5lLFbV4vhPDEMAqodw"
+              CHAT_ID="5649252463"
+              PROJECT_NAME="${{ inputs.vercelProject }}"
+              
+              MESSAGE="🚨 *Rollback Tardio Executado!*
+
+🏗️ *Projeto:* $PROJECT_NAME
+⚠️ *Motivo:* ${CONSECUTIVE_FAILURES} falhas consecutivas detectadas
+⏱️ *Tempo até falha:* ${ELAPSED_MINUTES} minutos
+🌐 *URL:* $DEPLOY_URL
+📁 *Repo:* ${{ github.repository }}
+📝 *Commit:* ${{ github.sha }}
+
+Deploy que passou nos testes iniciais apresentou falhas após ${ELAPSED_MINUTES} minutos em produção."
+              
+              curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+                -d "chat_id=$CHAT_ID" \
+                -d "text=$MESSAGE" \
+                -d "parse_mode=Markdown" || echo "⚠️ Falha ao enviar notificação"
+              
+              exit 1
+            else
+              echo "❌ Não foi possível encontrar deployment anterior para rollback"
+              exit 1
+            fi
+          else
+            echo "🎉 Monitoramento concluído com sucesso!"
+            echo "✅ Aplicação estável por $DURATION_MINUTES minutos"
+            
+            # Envia notificação de sucesso do monitoramento
+            BOT_TOKEN="8045408592:AAHtPkn2DTPTrL3rs5lLFbV4vhPDEMAqodw"
+            CHAT_ID="5649252463"
+            PROJECT_NAME="${{ inputs.vercelProject }}"
+            
+            MESSAGE="✅ *Deploy Estável Confirmado!*
+
+🏗️ *Projeto:* $PROJECT_NAME
+⏱️ *Monitorado por:* $DURATION_MINUTES minutos
+🔍 *Verificações:* $((CHECK_COUNT - 1))
+📊 *Status:* Estável
+🌐 *URL:* $DEPLOY_URL
+
+Deploy monitorado sem problemas!"
+            
+            curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+              -d "chat_id=$CHAT_ID" \
+              -d "text=$MESSAGE" \
+              -d "parse_mode=Markdown" || echo "⚠️ Falha ao enviar notificação"
+          fi
