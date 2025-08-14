@@ -1,0 +1,107 @@
+name: Reusable Vercel Deploy + Auto Rollback
+
+on:
+  workflow_call:
+    inputs:
+      vercelProject:
+        description: "Nome exato do projeto no Vercel"
+        required: true
+        type: string
+      routes:
+        description: "Rotas para health check, separadas por vírgula (ex: '/,/login,/checkout')"
+        required: false
+        type: string
+        default: "/"
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+      VERCEL_TEAM_ID:
+        required: true
+      VERCEL_SCOPE:
+        required: true
+
+jobs:
+  deploy-and-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (repo que chamou)
+        uses: actions/checkout@v4
+
+      - name: Instalar ferramentas
+        run: |
+          npm i -g vercel
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Deploy para Vercel (produção)
+        run: |
+          npx vercel --prod --confirm \
+            --token="${{ secrets.VERCEL_TOKEN }}" \
+            --scope="${{ secrets.VERCEL_SCOPE }}"
+
+      - name: Descobrir URL do último deploy em produção
+        id: discover
+        run: |
+          # pega o ID do projeto (a partir do nome)
+          PROJECT_INFO=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+            "https://api.vercel.com/v9/projects/${{ inputs.vercelProject }}?teamId=${{ secrets.VERCEL_TEAM_ID }}")
+          PROJECT_ID=$(echo "$PROJECT_INFO" | jq -r '.id')
+
+          # pega o deployment mais recente pronto em produção
+          LATEST=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+            "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&teamId=${{ secrets.VERCEL_TEAM_ID }}&target=production&limit=1&state=READY")
+          DEPLOY_URL=$(echo "$LATEST" | jq -r '.deployments[0].url')
+          echo "deploy_url=https://$DEPLOY_URL" >> $GITHUB_OUTPUT
+
+      - name: Health checks nas rotas
+        id: health
+        run: |
+          set +e
+          FAIL=0
+          ROUTES="${{ inputs.routes }}"
+          if [ -z "$ROUTES" ]; then ROUTES="/"; fi
+
+          DEPLOY_URL="${{ steps.discover.outputs.deploy_url }}"
+          echo "Testando em: $DEPLOY_URL"
+          IFS=',' read -ra ARR <<< "$ROUTES"
+          for path in "${ARR[@]}"; do
+            # garante que a rota começa com /
+            if [[ "$path" != /* ]]; then path="/$path"; fi
+            url="${DEPLOY_URL}${path}"
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+            echo "$url -> $CODE"
+            # considera sucesso 200-399
+            if [ "$CODE" -lt 200 ] || [ "$CODE" -ge 400 ]; then
+              FAIL=1
+            fi
+          done
+
+          if [ $FAIL -eq 1 ]; then
+            echo "failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "failed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Instant Rollback (se falhar)
+        if: steps.health.outputs.failed == 'true'
+        run: |
+          echo "Falhou health check. Iniciando rollback..."
+          PROJECT_INFO=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+            "https://api.vercel.com/v9/projects/${{ inputs.vercelProject }}?teamId=${{ secrets.VERCEL_TEAM_ID }}")
+          PROJECT_ID=$(echo "$PROJECT_INFO" | jq -r '.id')
+
+          # pega o deployment atual + o anterior (limit=2) e escolhe o anterior
+          HIST=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+            "https://api.vercel.com/v6/deployments?teamId=${{ secrets.VERCEL_TEAM_ID }}&projectId=$PROJECT_ID&limit=2&state=READY&target=production")
+          PREV_UID=$(echo "$HIST" | jq -r '.deployments[1].uid')
+
+          if [ "$PREV_UID" = "null" ] || [ -z "$PREV_UID" ]; then
+            echo "Não há deployment anterior elegível para rollback."
+            exit 1
+          fi
+
+          curl -s -X POST "https://api.vercel.com/v9/projects/$PROJECT_ID/rollback/$PREV_UID?teamId=${{ secrets.VERCEL_TEAM_ID }}" \
+            -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+            -H "Content-Type: application/json"
+
+          echo "Rollback solicitado para deployment $PREV_UID."
