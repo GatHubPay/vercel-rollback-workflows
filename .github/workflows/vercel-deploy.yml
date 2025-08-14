@@ -1,0 +1,74 @@
+# 🚀 Workflow Reutilizável - Deploy Vercel
+# Uso: GatHubPay/vercel-rollback-workflows/.github/workflows/vercel-deploy.yml@main
+
+name: Vercel Deploy
+
+on:
+  workflow_call:
+    inputs:
+      vercelProject:
+        description: "Nome do projeto no Vercel"
+        required: true
+        type: string
+      projectUrl:
+        description: "URL para health check"
+        required: true
+        type: string
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+      VERCEL_TEAM_ID:
+        required: true
+      TELEGRAM_BOT_TOKEN:
+        required: true
+      TELEGRAM_CHAT_ID:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        
+      - name: 🚀 Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_TEAM_ID }}
+          vercel-project-id: ${{ inputs.vercelProject }}
+          working-directory: ./
+          
+      - name: 🧪 Health Check
+        run: |
+          echo "🔍 Verificando deploy..."
+          sleep 15
+          
+          STATUS=$(curl -s -w "%{http_code}" -o /dev/null --max-time 30 --connect-timeout 10 "${{ inputs.projectUrl }}" || echo "000")
+          
+          echo "📊 Status: $STATUS"
+          
+          if [[ "$STATUS" == "200" ]]; then
+            echo "✅ Deploy funcionando!"
+          else
+            echo "⚠️  Status $STATUS - mas deploy pode estar OK"
+          fi
+          
+      - name: 📱 Notificação Sucesso
+        if: success()
+        run: |
+          MESSAGE="✅ Deploy realizado com sucesso!%0A%0A🎯 Projeto: ${{ inputs.vercelProject }}%0A🌐 URL: ${{ inputs.projectUrl }}%0A📊 Commit: ${GITHUB_SHA:0:7}%0A👤 Por: ${{ github.actor }}%0A🕒 $(date +'%d/%m/%Y %H:%M')"
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE" || echo "📱 Telegram falhou"
+            
+      - name: 📱 Notificação Erro
+        if: failure()
+        run: |
+          MESSAGE="❌ Falha no deploy!%0A%0A🎯 Projeto: ${{ inputs.vercelProject }}%0A📊 Commit: ${GITHUB_SHA:0:7}%0A👤 Por: ${{ github.actor }}%0A🔗 Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}%0A🕒 $(date +'%d/%m/%Y %H:%M')"
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE" || echo "📱 Telegram falhou"
