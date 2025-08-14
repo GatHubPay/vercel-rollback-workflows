@@ -1,0 +1,110 @@
+# 🎯 Monitoramento de Lógica de Negócio
+# Testa funcionalidades críticas como PIX, login, compras
+
+name: Monitor Business Logic
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # A cada 30 minutos (menos frequente)
+  workflow_dispatch:         # Permite executar manualmente
+
+jobs:
+  test-critical-functions:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        # 🎯 TESTES DE FUNCIONALIDADES CRÍTICAS:
+        test:
+          - name: "pix-integration"
+            site: "rasparei"
+            url: "https://rasparei.com/api/pix/status"
+            expected: "ok"
+            critical: true
+          - name: "user-balance"
+            site: "rasparei"
+            url: "https://rasparei.com/api/user/balance"
+            expected: "balance"
+            critical: true
+          - name: "admin-dashboard"
+            site: "admin-raspaganha"
+            url: "https://admin.raspaganha.sa.com/api/health"
+            expected: "healthy"
+            critical: true
+          # ➕ Adicione mais testes conforme necessário
+      fail-fast: false  # Continua testando outras funções mesmo se uma falhar
+    
+    steps:
+      - name: 🎯 Testar ${{ matrix.test.name }}
+        run: |
+          echo "🎯 Testando função crítica: ${{ matrix.test.name }}"
+          echo "🌐 Endpoint: ${{ matrix.test.url }}"
+          
+          # Fazer requisição para endpoint de teste
+          RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};TIME:%{time_total}" \
+                         --max-time 30 \
+                         "${{ matrix.test.url }}" || echo "HTTPSTATUS:000;TIME:999")
+          
+          STATUS=$(echo $RESPONSE | grep -o "HTTPSTATUS:[0-9]*" | cut -d: -f2)
+          TIME=$(echo $RESPONSE | grep -o "TIME:[0-9.]*" | cut -d: -f2)
+          CONTENT=$(curl -s --max-time 30 "${{ matrix.test.url }}" || echo "")
+          
+          echo "📊 Status: $STATUS"
+          echo "⚡ Tempo: ${TIME}s"
+          echo "📄 Resposta: ${CONTENT:0:200}..."
+          
+          # Verificar problemas
+          PROBLEMS=""
+          FUNCTION_OK=true
+          
+          if [[ "$STATUS" != "200" ]]; then
+            PROBLEMS="${PROBLEMS}• API não responde (HTTP $STATUS)%0A"
+            FUNCTION_OK=false
+          elif [[ -z "$CONTENT" ]]; then
+            PROBLEMS="${PROBLEMS}• Resposta vazia da API%0A"
+            FUNCTION_OK=false
+          elif ! echo "$CONTENT" | grep -qi "${{ matrix.test.expected }}"; then
+            PROBLEMS="${PROBLEMS}• Resposta inesperada (não contém '${{ matrix.test.expected }}')%0A"
+            FUNCTION_OK=false
+          elif (( $(echo "$TIME > 10.0" | bc -l 2>/dev/null || echo "0") )); then
+            PROBLEMS="${PROBLEMS}• API muito lenta (${TIME}s)%0A"
+            FUNCTION_OK=false
+          fi
+          
+          # Verificar erros específicos na resposta
+          if echo "$CONTENT" | grep -qi "error\|failed\|exception\|timeout"; then
+            PROBLEMS="${PROBLEMS}• Erro detectado na resposta da API%0A"
+            FUNCTION_OK=false
+          fi
+          
+          # Enviar alerta se função crítica falhar
+          if [[ "$FUNCTION_OK" == "false" && "${{ matrix.test.critical }}" == "true" ]]; then
+            MESSAGE="🚨 FUNÇÃO CRÍTICA FALHANDO!%0A%0A🎯 Função: ${{ matrix.test.name }}%0A🏢 Site: ${{ matrix.test.site }}%0A🌐 Endpoint: ${{ matrix.test.url }}%0A📊 Status: $STATUS%0A⚡ Tempo: ${TIME}s%0A📅 Data: $(TZ='America/Sao_Paulo' date '+%d/%m/%Y')%0A⏰ Hora: $(TZ='America/Sao_Paulo' date '+%H:%M:%S') (Brasília)%0A%0A🔍 Problemas:%0A$PROBLEMS%0A🔥 VERIFICAR URGENTE - USUÁRIOS AFETADOS!"
+            
+            # Enviar alerta crítico
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+              -d "text=$MESSAGE" || echo "⚠️ Falha ao enviar alerta"
+            
+            echo "🚨 ALERTA CRÍTICO ENVIADO para ${{ matrix.test.name }}!"
+            exit 1  # Falha o job para aparecer no GitHub
+          elif [[ "$FUNCTION_OK" == "false" ]]; then
+            echo "⚠️ Função ${{ matrix.test.name }} com problema (não crítica)"
+          else
+            echo "✅ Função ${{ matrix.test.name }} funcionando normalmente"
+          fi
+
+  # 📊 RESUMO DAS FUNÇÕES CRÍTICAS
+  summary:
+    runs-on: ubuntu-latest
+    needs: test-critical-functions
+    if: always()
+    
+    steps:
+      - name: 📊 Resumo das Funções Críticas
+        run: |
+          echo "🎯 Monitoramento de lógica de negócio executado"
+          echo "⏰ Horário: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          # Se houver falhas, elas já foram reportadas individualmente
+          echo "✅ Próxima verificação em 30 minutos"

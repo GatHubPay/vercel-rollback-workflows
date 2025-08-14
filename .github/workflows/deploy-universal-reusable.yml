@@ -76,7 +76,7 @@ jobs:
 
       - name: 📱 Notificar Deploy Iniciado
         run: |
-          MESSAGE="🚀 Deploy ${{ inputs.environment }} iniciado%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A🌐 Site: ${{ inputs.site_url }}%0A📊 Commit: ${GITHUB_SHA:0:7}%0A👤 Por: ${{ github.actor }}%0A⏰ Horário: $(date '+%d/%m/%Y %H:%M:%S')%0A🔄 Aguardando health check..."
+          MESSAGE="🚀 Deploy ${{ inputs.environment }} iniciado%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A🌐 Site: ${{ inputs.site_url }}%0A📊 Commit: ${GITHUB_SHA:0:7}%0A👤 Por: ${{ github.actor }}%0A⏰ Horário: $(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S') (Brasília)%0A🔄 Aguardando health check..."
           
           # Tentar enviar notificação (não falhar o workflow se der erro)
           if ! curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
@@ -278,13 +278,13 @@ jobs:
           
           if [[ "$HEALTH_PASSED" == "true" ]]; then
             # ✅ SUCESSO
-            MESSAGE="✅ ${{ inputs.project_name }} - FUNCIONANDO!%0A%0A🏢 Deploy profissional concluído%0A🌐 Site: ${{ inputs.site_url }}%0A📊 Status: $STATUS_CODE%0A⚡ Tempo: ${RESPONSE_TIME}s%0A📊 Commit: ${GITHUB_SHA:0:7}%0A⏰ Concluído: $(date '+%d/%m/%Y %H:%M:%S')%0A%0A🎯 Deploy estilo Big Companies!"
+            MESSAGE="✅ ${{ inputs.project_name }} - FUNCIONANDO!%0A%0A🏢 Deploy profissional concluído%0A🌐 Site: ${{ inputs.site_url }}%0A📊 Status: $STATUS_CODE%0A⚡ Tempo: ${RESPONSE_TIME}s%0A📊 Commit: ${GITHUB_SHA:0:7}%0A⏰ Concluído: $(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S') (Brasília)%0A%0A🎯 Deploy estilo Big Companies!"
           else
             # ❌ FALHA
             if [[ "$ROLLBACK_EXECUTED" == "true" ]]; then
-              MESSAGE="🔄 ROLLBACK EXECUTADO!%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A🚨 Deploy falhou mas foi revertido%0A✅ Site funcionando (versão anterior)%0A🌐 ${{ inputs.site_url }}%0A📊 Status: $STATUS_CODE%0A📊 Commit: ${GITHUB_SHA:0:7}%0A⏰ Rollback: $(date '+%d/%m/%Y %H:%M:%S')%0A%0A✅ USUÁRIOS PROTEGIDOS!"
+              MESSAGE="🔄 ROLLBACK EXECUTADO!%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A🚨 Deploy falhou mas foi revertido%0A✅ Site funcionando (versão anterior)%0A🌐 ${{ inputs.site_url }}%0A📊 Status: $STATUS_CODE%0A📊 Commit: ${GITHUB_SHA:0:7}%0A⏰ Rollback: $(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S') (Brasília)%0A%0A✅ USUÁRIOS PROTEGIDOS!"
             else
-              MESSAGE="🚨 DEPLOY FALHOU!%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A❌ Health check falhou%0A🔍 Erro: $ERROR_DETAILS%0A📊 Status: $STATUS_CODE%0A⚡ Tempo: ${RESPONSE_TIME}s%0A🔄 Rollback: $ROLLBACK_EXECUTED%0A🌐 ${{ inputs.site_url }}%0A📊 Commit: ${GITHUB_SHA:0:7}%0A⏰ Falha: $(date '+%d/%m/%Y %H:%M:%S')%0A%0A🔥 INTERVENÇÃO NECESSÁRIA!"
+              MESSAGE="🚨 DEPLOY FALHOU!%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A❌ Health check falhou%0A🔍 Erro: $ERROR_DETAILS%0A📊 Status: $STATUS_CODE%0A⚡ Tempo: ${RESPONSE_TIME}s%0A🔄 Rollback: $ROLLBACK_EXECUTED%0A🌐 ${{ inputs.site_url }}%0A📊 Commit: ${GITHUB_SHA:0:7}%0A⏰ Falha: $(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S') (Brasília)%0A%0A🔥 INTERVENÇÃO NECESSÁRIA!"
             fi
           fi
           

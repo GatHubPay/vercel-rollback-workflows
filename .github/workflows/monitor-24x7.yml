@@ -5,7 +5,7 @@ name: Monitor 24/7
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # A cada 15 minutos, 24/7
+    - cron: '*/5 * * * *'   # A cada 5 minutos (padrão big companies)
   workflow_dispatch:         # Permite executar manualmente
 
 jobs:
@@ -54,24 +54,34 @@ jobs:
           PROBLEMS=""
           ALERT_LEVEL="info"
           
-          if [[ "$STATUS" != "200" ]]; then
-            PROBLEMS="${PROBLEMS}• HTTP $STATUS (site offline)%0A"
+          if [[ "$STATUS" == "000" ]]; then
+            PROBLEMS="${PROBLEMS}• Domínio não resolve ou servidor offline%0A"
             ALERT_LEVEL="critical"
+            echo "🚨 CRÍTICO: Domínio/Servidor completamente fora do ar"
+          elif [[ "$STATUS" != "200" ]]; then
+            PROBLEMS="${PROBLEMS}• HTTP $STATUS (erro no servidor)%0A"
+            ALERT_LEVEL="critical"
+            echo "🚨 CRÍTICO: Servidor respondendo com erro $STATUS"
           elif [[ "$SIZE" -lt 1000 ]]; then
             PROBLEMS="${PROBLEMS}• Página muito pequena (${SIZE} bytes)%0A"
             ALERT_LEVEL="warning"
-          elif (( $(echo "$TIME > 10.0" | bc -l 2>/dev/null || echo "0") )); then
-            PROBLEMS="${PROBLEMS}• Site muito lento (${TIME}s)%0A"
+          elif (( $(echo "$TIME > 3.0" | bc -l 2>/dev/null || echo "0") )); then
+            PROBLEMS="${PROBLEMS}• Site muito lento (${TIME}s) - limite big companies%0A"
+            ALERT_LEVEL="critical"
+            echo "🚨 CRÍTICO: Site muito lento - acima do padrão profissional (3s)"
+          elif (( $(echo "$TIME > 2.0" | bc -l 2>/dev/null || echo "0") )); then
+            PROBLEMS="${PROBLEMS}• Site lento (${TIME}s) - monitorar performance%0A"
             ALERT_LEVEL="warning"
+            echo "⚠️ AVISO: Site mais lento que o ideal (2s)"
           fi
           
-          # 🚨 VERIFICAR ERROS ESPECÍFICOS NO CONTEÚDO
-          if echo "$CONTENT" | grep -qi "application error\|client-side exception\|500\|internal server error\|fatal error\|error occurred\|something went wrong\|service unavailable"; then
+          # 🚨 VERIFICAR ERROS ESPECÍFICOS NO CONTEÚDO (apenas se status não for 200)
+          if [[ "$STATUS" != "200" ]] && echo "$CONTENT" | grep -qi "application error\|client-side exception\|internal server error\|fatal error\|error occurred\|something went wrong\|service unavailable"; then
             if echo "$CONTENT" | grep -qi "application error.*client-side exception"; then
               PROBLEMS="${PROBLEMS}• Application Error detectado%0A"
               echo "🚨 ERRO DETECTADO: Application Error (client-side exception)"
-            elif echo "$CONTENT" | grep -qi "500\|internal server error"; then
-              PROBLEMS="${PROBLEMS}• Internal Server Error (500)%0A"
+            elif echo "$CONTENT" | grep -qi "internal server error"; then
+              PROBLEMS="${PROBLEMS}• Internal Server Error detectado%0A"
               echo "🚨 ERRO DETECTADO: Internal Server Error"
             elif echo "$CONTENT" | grep -qi "fatal error"; then
               PROBLEMS="${PROBLEMS}• Fatal Error na aplicação%0A"
@@ -81,6 +91,11 @@ jobs:
               echo "🚨 ERRO DETECTADO: Erro genérico na página"
             fi
             ALERT_LEVEL="critical"
+          elif [[ "$STATUS" == "200" ]] && echo "$CONTENT" | grep -qi "application error.*has occurred\|fatal error.*occurred\|internal server error.*occurred"; then
+            # Só detectar erros REAIS quando status é 200 (frases completas de erro)
+            PROBLEMS="${PROBLEMS}• Erro real detectado na página%0A"
+            ALERT_LEVEL="critical"
+            echo "🚨 ERRO REAL: Página com erro mesmo tendo status 200"
           fi
           
           # Enviar alerta se houver problema
@@ -93,7 +108,7 @@ jobs:
               TITLE="PROBLEMA DETECTADO"
             fi
             
-            MESSAGE="$EMOJI $TITLE - ${{ matrix.site.name }}%0A%0A🌐 Site: ${{ matrix.site.url }}%0A📊 Status: $STATUS%0A⚡ Tempo: ${TIME}s%0A📄 Tamanho: $SIZE bytes%0A📅 Data: $(date '+%d/%m/%Y')%0A⏰ Hora: $(date '+%H:%M:%S')%0A%0A🔍 Problemas:%0A$PROBLEMS%0A🔥 VERIFICAR URGENTE!"
+            MESSAGE="$EMOJI $TITLE - ${{ matrix.site.name }}%0A%0A🌐 Site: ${{ matrix.site.url }}%0A📊 Status: $STATUS%0A⚡ Tempo: ${TIME}s%0A📄 Tamanho: $SIZE bytes%0A📅 Data: $(TZ='America/Sao_Paulo' date '+%d/%m/%Y')%0A⏰ Hora: $(TZ='America/Sao_Paulo' date '+%H:%M:%S') (Brasília)%0A%0A🔍 Problemas:%0A$PROBLEMS%0A🔥 VERIFICAR URGENTE!"
             
             # Enviar alerta imediato
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
