@@ -77,7 +77,13 @@ jobs:
       - name: 📱 Notificar Deploy Iniciado
         run: |
           MESSAGE="🚀 Deploy ${{ inputs.environment }} iniciado%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A🌐 Site: ${{ inputs.site_url }}%0A📊 Commit: ${GITHUB_SHA:0:7}%0A👤 Por: ${{ github.actor }}%0A🔄 Aguardando health check..."
-          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=$MESSAGE"
+          
+          # Tentar enviar notificação (não falhar o workflow se der erro)
+          if ! curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE"; then
+            echo "⚠️ Falha na notificação Telegram - continuando deploy..."
+          fi
 
   # 🔍 HEALTH CHECK PROFISSIONAL
   health-check:
