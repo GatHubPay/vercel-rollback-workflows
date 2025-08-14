@@ -4,15 +4,25 @@ Template final e limpo para deploy do RaspaGanha V2.
 
 ## 🚀 Como Usar
 
-**Opção 1 - Workflow Standalone:**
-1. Copie: `deploy-raspaganha-v2.yml`
+**✅ Versão Melhorada (Recomendado):**
+1. Copie: `deploy-raspaganha-v2-melhorado.yml`
 2. Cole em: `.github/workflows/deploy-caixabox.yml`
 
-**Opção 2 - Workflow Reutilizável (Recomendado):**
+**Opção 2 - Workflow Reutilizável:**
 1. Copie: `deploy-raspaganha-v2-reusable.yml`  
 2. Cole em: `.github/workflows/deploy-caixabox.yml`
 
 **3. Faça commit e pronto!** ✅
+
+## 🔍 **Health Check Avançado**
+
+A versão melhorada verifica:
+- ✅ Site responde (200 OK)
+- ✅ Imagens das raspadinhas carregando
+- ✅ Textos importantes presentes
+- ✅ Botões de jogo funcionando
+- ✅ CSS e JavaScript carregando
+- 🚨 Avisa no Telegram sobre problemas reais
 
 ## 🔧 Secrets Necessários
 

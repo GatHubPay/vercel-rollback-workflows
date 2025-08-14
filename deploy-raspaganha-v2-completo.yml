@@ -1,0 +1,292 @@
+# 🎮 Deploy RaspaGanha V2 - Monitoramento Completo
+# Monitora QUALQUER deploy em produção + Health Check + Rollback
+
+name: Deploy RaspaGanha V2
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+  schedule:
+    # Executa a cada 30 minutos para verificar deploys manuais
+    - cron: '*/30 * * * *'
+
+jobs:
+  # Job 1: Deploy automático (só para main/master)
+  deploy:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        
+      - name: 🚀 Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        id: vercel-deploy
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_TEAM_ID }}
+          vercel-project-id: rasparei
+          
+      - name: ⏳ Aguardar Deploy
+        run: |
+          echo "⏳ Aguardando deploy automático ficar disponível..."
+          sleep 20
+          
+      - name: 📱 Notificar Deploy Iniciado
+        run: |
+          MESSAGE="🚀 Deploy RaspaGanha V2 iniciado%0A%0A📊 Commit: ${GITHUB_SHA:0:7}%0A👤 Por: ${{ github.actor }}%0A🔄 Aguardando health check..."
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE"
+
+  # Job 2: Health Check (sempre executa)
+  health-check:
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+    
+    steps:
+      - name: 🔍 Health Check Ultra Rigoroso
+        id: health-check
+        run: |
+          echo "🔍 Verificando aplicação em produção..."
+          echo "🌐 URL: https://rasparei.com/"
+          
+          ERRORS=0
+          WARNINGS=0
+          DEPLOY_SOURCE="desconhecido"
+          
+          # Detectar fonte do deploy
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            DEPLOY_SOURCE="push automático (branch: ${{ github.ref_name }})"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            DEPLOY_SOURCE="deploy manual via GitHub"
+          elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+            DEPLOY_SOURCE="verificação periódica (possível deploy manual no Vercel)"
+          fi
+          
+          echo "📋 Fonte: $DEPLOY_SOURCE"
+          
+          # 1. Verificar conectividade
+          echo "📊 1. Testando conectividade..."
+          STATUS=$(curl -s -w "%{http_code}" -o /tmp/page.html --max-time 30 "https://rasparei.com/" || echo "000")
+          echo "Status HTTP: $STATUS"
+          
+          if [[ "$STATUS" != "200" ]]; then
+            echo "❌ ERRO CRÍTICO: Site não responde (Status: $STATUS)"
+            ERRORS=$((ERRORS + 1))
+          fi
+          
+          # 2. Verificar tamanho da página
+          PAGE_SIZE=$(wc -c < /tmp/page.html 2>/dev/null || echo "0")
+          echo "📏 2. Tamanho: $PAGE_SIZE bytes"
+          
+          if [[ "$PAGE_SIZE" -lt 10000 ]]; then
+            echo "❌ ERRO: Página muito pequena ($PAGE_SIZE bytes)"
+            ERRORS=$((ERRORS + 1))
+          fi
+          
+          # 3. Verificar erros JavaScript
+          echo "📜 3. Verificando erros JS..."
+          if grep -qi "error\|exception\|undefined\|null is not\|cannot read" /tmp/page.html; then
+            echo "❌ ERRO: Erros JavaScript detectados"
+            ERRORS=$((ERRORS + 1))
+          fi
+          
+          # 4. Verificar erros Next.js
+          echo "⚛️  4. Verificando erros Next.js..."
+          if grep -qi "application error\|500\|404\|error occurred\|something went wrong" /tmp/page.html; then
+            echo "❌ ERRO: Mensagens de erro detectadas"
+            ERRORS=$((ERRORS + 1))
+          fi
+          
+          # 5. Verificar elementos críticos
+          echo "🎮 5. Verificando elementos do jogo..."
+          
+          IMAGES_COUNT=$(grep -o 'src="[^"]*' /tmp/page.html | grep -E '\.(jpg|jpeg|png|gif|webp)' | wc -l || echo "0")
+          echo "   🖼️  Imagens: $IMAGES_COUNT"
+          
+          if [[ "$IMAGES_COUNT" -lt 5 ]]; then
+            echo "❌ ERRO: Poucas imagens ($IMAGES_COUNT) - raspadinhas quebradas"
+            ERRORS=$((ERRORS + 1))
+          fi
+          
+          # Textos essenciais
+          REQUIRED_TEXTS=("Raspadinha" "Prêmios" "Jogar" "Depositar" "Saldo")
+          for text in "${REQUIRED_TEXTS[@]}"; do
+            if ! grep -qi "$text" /tmp/page.html; then
+              echo "❌ ERRO: Texto '$text' não encontrado"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+          
+          # 6. Verificar recursos
+          JS_COUNT=$(grep -o '<script[^>]*src="[^"]*"' /tmp/page.html | wc -l || echo "0")
+          CSS_COUNT=$(grep -o '<link[^>]*rel="stylesheet"' /tmp/page.html | wc -l || echo "0")
+          
+          echo "   📜 Scripts: $JS_COUNT"
+          echo "   🎨 Estilos: $CSS_COUNT"
+          
+          if [[ "$JS_COUNT" -lt 3 ]]; then
+            echo "❌ ERRO: Poucos scripts ($JS_COUNT)"
+            ERRORS=$((ERRORS + 1))
+          fi
+          
+          if [[ "$CSS_COUNT" -lt 2 ]]; then
+            echo "❌ ERRO: Poucos estilos ($CSS_COUNT)"
+            ERRORS=$((ERRORS + 1))
+          fi
+          
+          # 7. Verificar estrutura HTML
+          if ! grep -q "<html" /tmp/page.html; then
+            echo "❌ ERRO: Tag HTML não encontrada"
+            ERRORS=$((ERRORS + 1))
+          fi
+          
+          rm -f /tmp/page.html
+          
+          # Coletar detalhes dos erros para relatório
+          ERROR_DETAILS=""
+          if [[ "$STATUS" != "200" ]]; then
+            ERROR_DETAILS="${ERROR_DETAILS}• Site não responde (HTTP $STATUS)%0A"
+          fi
+          if [[ "$PAGE_SIZE" -lt 10000 ]]; then
+            ERROR_DETAILS="${ERROR_DETAILS}• Página muito pequena ($PAGE_SIZE bytes)%0A"
+          fi
+          if [[ "$IMAGES_COUNT" -lt 5 ]]; then
+            ERROR_DETAILS="${ERROR_DETAILS}• Poucas imagens ($IMAGES_COUNT/5)%0A"
+          fi
+          if [[ "$JS_COUNT" -lt 3 ]]; then
+            ERROR_DETAILS="${ERROR_DETAILS}• Poucos scripts JS ($JS_COUNT/3)%0A"
+          fi
+          if [[ "$CSS_COUNT" -lt 2 ]]; then
+            ERROR_DETAILS="${ERROR_DETAILS}• Poucos arquivos CSS ($CSS_COUNT/2)%0A"
+          fi
+          
+          # Salvar informações para próximo job
+          echo "deploy_source=$DEPLOY_SOURCE" >> $GITHUB_OUTPUT
+          echo "errors_count=$ERRORS" >> $GITHUB_OUTPUT
+          echo "warnings_count=$WARNINGS" >> $GITHUB_OUTPUT
+          echo "images_count=$IMAGES_COUNT" >> $GITHUB_OUTPUT
+          echo "js_count=$JS_COUNT" >> $GITHUB_OUTPUT
+          echo "css_count=$CSS_COUNT" >> $GITHUB_OUTPUT
+          echo "error_details=$ERROR_DETAILS" >> $GITHUB_OUTPUT
+          
+          # Resultado
+          echo ""
+          echo "📊 RESULTADO:"
+          echo "❌ Erros: $ERRORS"
+          echo "⚠️  Avisos: $WARNINGS"
+          
+          if [[ "$ERRORS" -gt 0 ]]; then
+            echo ""
+            echo "🚨 HEALTH CHECK FALHOU!"
+            echo "health_check_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo ""
+            echo "✅ HEALTH CHECK PASSOU!"
+            echo "health_check_passed=true" >> $GITHUB_OUTPUT
+          fi
+
+  # Job 3: Rollback (SEMPRE que health check falhar)
+  rollback:
+    runs-on: ubuntu-latest
+    needs: [deploy, health-check]
+    if: always() && needs.health-check.outputs.health_check_passed == 'false' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    
+    steps:
+      - name: 🔄 Rollback Automático
+        run: |
+          echo "🚨 EXECUTANDO ROLLBACK AUTOMÁTICO..."
+          echo "Deploy automático falhou - revertendo"
+          
+          npm install -g vercel@latest
+          
+          echo "🔍 Buscando deployment anterior..."
+          echo "📋 Listando últimos 10 deployments..."
+          DEPLOYMENTS=$(npx vercel ls rasparei --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" -m 10)
+          echo "📊 Deployments encontrados:"
+          echo "$DEPLOYMENTS"
+          
+          PREVIOUS_URL=$(echo "$DEPLOYMENTS" | grep -E "https://.*\.vercel\.app" | sed -n '2p' | awk '{print $1}')
+          
+          if [ -z "$PREVIOUS_URL" ]; then
+            echo "❌ Deployment anterior não encontrado"
+            echo "🔍 Tentando encontrar deployment estável..."
+            
+            # Buscar qualquer deployment que não seja o atual
+            STABLE_URL=$(echo "$DEPLOYMENTS" | grep -E "https://.*\.vercel\.app" | head -2 | tail -1 | awk '{print $1}')
+            
+            if [ -n "$STABLE_URL" ]; then
+              echo "🔄 Usando deployment estável: $STABLE_URL"
+              npx vercel promote "$STABLE_URL" --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" --yes
+              echo "rollback_executed=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Nenhum deployment disponível para rollback"
+              echo "rollback_executed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "🔄 Executando rollback para: $PREVIOUS_URL"
+            npx vercel promote "$PREVIOUS_URL" --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" --yes
+            
+            if [ $? -eq 0 ]; then
+              echo "✅ ROLLBACK EXECUTADO COM SUCESSO!"
+              echo "🧪 Aguardando 30 segundos para estabilizar..."
+              sleep 30
+              
+              # Verificar se rollback funcionou
+              echo "🔍 Verificando se rollback funcionou..."
+              ROLLBACK_STATUS=$(curl -s -w "%{http_code}" -o /dev/null --max-time 30 "https://rasparei.com/" || echo "000")
+              
+              if [[ "$ROLLBACK_STATUS" == "200" ]]; then
+                echo "✅ ROLLBACK VERIFICADO - SITE FUNCIONANDO!"
+                echo "rollback_executed=true" >> $GITHUB_OUTPUT
+              else
+                echo "❌ ROLLBACK FALHOU - SITE AINDA COM PROBLEMAS (Status: $ROLLBACK_STATUS)"
+                echo "rollback_executed=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "❌ Comando de rollback falhou"
+              echo "rollback_executed=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+  # Job 4: Notificações (sempre executa)
+  notify:
+    runs-on: ubuntu-latest
+    needs: [health-check, rollback]
+    if: always()
+    
+    steps:
+      - name: 📱 Telegram Notification
+        run: |
+          HEALTH_PASSED="${{ needs.health-check.outputs.health_check_passed }}"
+          DEPLOY_SOURCE="${{ needs.health-check.outputs.deploy_source }}"
+          ERRORS="${{ needs.health-check.outputs.errors_count }}"
+          IMAGES="${{ needs.health-check.outputs.images_count }}"
+          ERROR_DETAILS="${{ needs.health-check.outputs.error_details }}"
+          ROLLBACK="${{ needs.rollback.outputs.rollback_executed || 'não executado' }}"
+          
+          if [[ "$HEALTH_PASSED" == "true" ]]; then
+            # Sucesso
+            MESSAGE="✅ RaspaGanha V2 - FUNCIONANDO!%0A%0A🎮 Site: https://rasparei.com/%0A🔍 Health Check: PASSOU%0A🖼️ Imagens: $IMAGES OK%0A📋 Fonte: $DEPLOY_SOURCE%0A%0A📊 Commit: ${GITHUB_SHA:0:7}%0A🕒 $(date +'%d/%m %H:%M')"
+          else
+            # Falha
+            if [[ "$ROLLBACK" == "true" ]]; then
+              MESSAGE="🔄 ROLLBACK EXECUTADO!%0A%0A🚨 Deploy falhou ($ERRORS erros)%0A✅ Site revertido automaticamente%0A🎮 https://rasparei.com/%0A📋 Fonte: $DEPLOY_SOURCE%0A%0A📊 Commit: ${GITHUB_SHA:0:7}%0A✅ USUÁRIOS PROTEGIDOS!"
+            else
+              if [[ "${{ github.event_name }}" == "schedule" ]]; then
+                MESSAGE="🚨 PROBLEMA DETECTADO!%0A%0A❌ Health check falhou ($ERRORS erros)%0A🔍 Possível deploy manual problemático%0A🎮 https://rasparei.com/%0A%0A⚠️ VERIFIQUE MANUALMENTE!%0AUsuários podem estar afetados"
+              else
+                MESSAGE="🚨 DEPLOY FALHOU!%0A%0A❌ Health check: $ERRORS erros detectados%0A%0A📋 DETALHES DOS ERROS:%0A$ERROR_DETAILS%0A❌ Rollback: $ROLLBACK%0A🎮 https://rasparei.com/%0A📋 Fonte: $DEPLOY_SOURCE%0A📊 Commit: ${GITHUB_SHA:0:7}%0A%0A🔥 INTERVENÇÃO NECESSÁRIA!%0A⚠️ SITE PODE ESTAR COM PROBLEMAS!"
+              fi
+            fi
+          fi
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE"
