@@ -1,0 +1,71 @@
+# 🎮 Template CaixaBox - Deploy com Rollback Automático
+# 
+# Otimizado para plataformas de jogos e caixas online
+# Configurações robustas para sistemas de entretenimento
+
+name: Deploy CaixaBox
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: GatHubPay/vercel-rollback-workflows/.github/workflows/vercel-rollback.yml@v1.1.0
+    with:
+      # ⬇️ OBRIGATÓRIO: Nome do seu projeto no Vercel
+      vercelProject: "rasparei"
+      
+      # ⬇️ ROTAS CRÍTICAS PARA PLATAFORMA DE JOGOS
+      routes: "/,/login,/jogos,/caixas,/carteira,/perfil,/historico,/api/health,/api/jogos,/api/caixas,/api/auth,/api/carteira"
+      
+      # ⬇️ CONFIGURAÇÕES ROBUSTAS PARA PLATAFORMA DE JOGOS
+      healthCheckTimeout: 45        # Timeout adequado para jogos
+      maxRetries: 4                 # Tentativas equilibradas
+      enablePostDeployMonitoring: true
+      monitoringDurationMinutes: 45 # Monitoramento de 45 min
+      monitoringIntervalMinutes: 5  # Verificações a cada 5 min
+      
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+# ========================================
+# ROTAS IMPORTANTES PARA CAIXABOX
+# ========================================
+#
+# Páginas Críticas:
+# / - Landing page principal
+# /login - Autenticação de usuários
+# /jogos - Catálogo de jogos disponíveis
+# /caixas - Sistema de caixas misteriosas
+# /carteira - Gestão financeira do usuário
+# /perfil - Perfil e configurações do usuário
+# /historico - Histórico de jogos e transações
+# /ranking - Ranking de jogadores
+# /promocoes - Promoções e ofertas
+#
+# APIs Críticas:
+# /api/health - Health check do sistema
+# /api/jogos - Listagem e dados dos jogos
+# /api/caixas - Sistema de caixas misteriosas
+# /api/auth - Autenticação e autorização
+# /api/carteira - Transações financeiras
+# /api/usuarios - Gestão de usuários
+# /api/ranking - Sistema de pontuação
+# /api/pagamentos - Processamento de pagamentos
+#
+# ========================================
+# CONFIGURAÇÕES ESPECÍFICAS PARA JOGOS
+# ========================================
+#
+# - Timeout de 45s para jogos (equilibrado)
+# - 4 tentativas para garantir disponibilidade
+# - Monitoramento de 45min para detectar problemas
+# - Verificações a cada 5min para resposta rápida
+# - Foco em rotas de jogos e caixas
+# - Sistema de carteira e transações
+#
+# ========================================

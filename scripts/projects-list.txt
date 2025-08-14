@@ -1,0 +1,16 @@
+# 📋 LISTA DE PROJETOS PARA CONFIGURAR
+# Adicione aqui os nomes dos seus repositórios no GitHub
+# Um por linha, sem espaços extras
+
+# Exemplos:
+# projeto-landing-page
+# ecommerce-store
+# blog-pessoal
+# saas-app
+# casa-apostas
+# gateway-pagamento
+
+# ⚠️  IMPORTANTE: 
+# - Use exatamente o nome do repositório no GitHub
+# - Sem espaços ou caracteres especiais
+# - Um projeto por linha
