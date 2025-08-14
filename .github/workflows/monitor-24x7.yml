@@ -1,0 +1,124 @@
+# 🚨 Monitoramento 24/7 - Todos os Sites da GatHubPay
+# Monitora TODOS os sites a cada 15 minutos
+
+name: Monitor 24/7
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # A cada 15 minutos, 24/7
+  workflow_dispatch:         # Permite executar manualmente
+
+jobs:
+  monitor-sites:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        # 🎯 TODOS OS SEUS SITES:
+        site:
+          - name: "rasparei"
+            url: "https://rasparei.com/"
+            timeout: 10
+          - name: "admin-raspaganha"
+            url: "https://admin.raspaganha.sa.com/"
+            timeout: 15
+          - name: "raspaganha-v2"
+            url: "https://raspaganha-v2.vercel.app/"
+            timeout: 10
+          # ➕ Adicione seus outros 7+ sites aqui conforme necessário
+      fail-fast: false  # Continua testando outros sites mesmo se um falhar
+    
+    steps:
+      - name: 🔍 Monitorar ${{ matrix.site.name }}
+        run: |
+          echo "🔍 Verificando ${{ matrix.site.name }}..."
+          echo "🌐 URL: ${{ matrix.site.url }}"
+          
+          # Health check completo
+          RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};TIME:%{time_total};SIZE:%{size_download}" \
+                         --max-time ${{ matrix.site.timeout }} \
+                         "${{ matrix.site.url }}" || echo "HTTPSTATUS:000;TIME:999;SIZE:0")
+          
+          STATUS=$(echo $RESPONSE | grep -o "HTTPSTATUS:[0-9]*" | cut -d: -f2)
+          TIME=$(echo $RESPONSE | grep -o "TIME:[0-9.]*" | cut -d: -f2)
+          SIZE=$(echo $RESPONSE | grep -o "SIZE:[0-9]*" | cut -d: -f2)
+          
+          # Capturar conteúdo da página para análise de erros
+          CONTENT=$(curl -s --max-time ${{ matrix.site.timeout }} "${{ matrix.site.url }}" || echo "")
+          
+          echo "📊 Status: $STATUS"
+          echo "⚡ Tempo: ${TIME}s"
+          echo "📄 Tamanho: $SIZE bytes"
+          
+          # Verificar problemas
+          PROBLEMS=""
+          ALERT_LEVEL="info"
+          
+          if [[ "$STATUS" != "200" ]]; then
+            PROBLEMS="${PROBLEMS}• HTTP $STATUS (site offline)%0A"
+            ALERT_LEVEL="critical"
+          elif [[ "$SIZE" -lt 1000 ]]; then
+            PROBLEMS="${PROBLEMS}• Página muito pequena (${SIZE} bytes)%0A"
+            ALERT_LEVEL="warning"
+          elif (( $(echo "$TIME > 10.0" | bc -l 2>/dev/null || echo "0") )); then
+            PROBLEMS="${PROBLEMS}• Site muito lento (${TIME}s)%0A"
+            ALERT_LEVEL="warning"
+          fi
+          
+          # 🚨 VERIFICAR ERROS ESPECÍFICOS NO CONTEÚDO
+          if echo "$CONTENT" | grep -qi "application error\|client-side exception\|500\|internal server error\|fatal error\|error occurred\|something went wrong\|service unavailable"; then
+            if echo "$CONTENT" | grep -qi "application error.*client-side exception"; then
+              PROBLEMS="${PROBLEMS}• Application Error detectado%0A"
+              echo "🚨 ERRO DETECTADO: Application Error (client-side exception)"
+            elif echo "$CONTENT" | grep -qi "500\|internal server error"; then
+              PROBLEMS="${PROBLEMS}• Internal Server Error (500)%0A"
+              echo "🚨 ERRO DETECTADO: Internal Server Error"
+            elif echo "$CONTENT" | grep -qi "fatal error"; then
+              PROBLEMS="${PROBLEMS}• Fatal Error na aplicação%0A"
+              echo "🚨 ERRO DETECTADO: Fatal Error"
+            else
+              PROBLEMS="${PROBLEMS}• Erro genérico detectado%0A"
+              echo "🚨 ERRO DETECTADO: Erro genérico na página"
+            fi
+            ALERT_LEVEL="critical"
+          fi
+          
+          # Enviar alerta se houver problema
+          if [[ -n "$PROBLEMS" ]]; then
+            if [[ "$ALERT_LEVEL" == "critical" ]]; then
+              EMOJI="🚨"
+              TITLE="SITE OFFLINE"
+            else
+              EMOJI="⚠️"
+              TITLE="PROBLEMA DETECTADO"
+            fi
+            
+            MESSAGE="$EMOJI $TITLE - ${{ matrix.site.name }}%0A%0A🌐 Site: ${{ matrix.site.url }}%0A📊 Status: $STATUS%0A⚡ Tempo: ${TIME}s%0A📄 Tamanho: $SIZE bytes%0A📅 Data: $(date '+%d/%m/%Y')%0A⏰ Hora: $(date '+%H:%M:%S')%0A%0A🔍 Problemas:%0A$PROBLEMS%0A🔥 VERIFICAR URGENTE!"
+            
+            # Enviar alerta imediato
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+              -d "text=$MESSAGE" || echo "⚠️ Falha ao enviar alerta"
+            
+            echo "🚨 ALERTA ENVIADO para ${{ matrix.site.name }}!"
+            exit 1  # Falha o job para aparecer no GitHub
+          else
+            echo "✅ ${{ matrix.site.name }} funcionando normalmente"
+          fi
+
+  # 📊 RESUMO GERAL (executa sempre, mesmo se sites falharem)
+  summary:
+    runs-on: ubuntu-latest
+    needs: monitor-sites
+    if: always()
+    
+    steps:
+      - name: 📊 Resumo do Monitoramento
+        run: |
+          echo "📊 Monitoramento 24/7 executado"
+          echo "⏰ Horário: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          # Em caso de falhas, o GitHub Actions já mostra no dashboard
+          # Aqui você pode adicionar lógica para contar sucessos/falhas
+          
+          echo "✅ Próxima verificação em 15 minutos"

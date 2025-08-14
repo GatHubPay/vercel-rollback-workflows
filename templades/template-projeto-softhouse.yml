@@ -10,7 +10,7 @@ on:
 
 jobs:
   deploy:
-    uses: SuaSofthouse/workflows/.github/workflows/deploy-universal-reusable.yml@main
+    uses: GatHubPay/vercel-rollback-workflows/.github/workflows/deploy-universal-reusable.yml@main
     with:
       # 🎯 CONFIGURE APENAS ESTAS 2 LINHAS:
       project_name: "NOME_DO_PROJETO"           # ← Mude aqui
@@ -21,9 +21,4 @@ jobs:
       health_check_timeout: 30                   # segundos
       enable_rollback: true                      # true/false
       
-    secrets:
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-      VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    secrets: inherit  # ✨ Herda secrets da organização automaticamente

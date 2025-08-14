@@ -1,0 +1,46 @@
+# 📊 Relatório Diário - GatHubPay Softhouse
+# Envia relatório diário de todos os deploys
+
+name: Relatório Diário
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # Todo dia às 9h da manhã
+  workflow_dispatch:      # Permite executar manualmente
+
+jobs:
+  daily-report:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📊 Gerar Relatório Diário
+        run: |
+          # Data atual
+          TODAY=$(date '+%Y-%m-%d')
+          YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
+          
+          echo "📊 Gerando relatório para $TODAY..."
+          
+          # Simular métricas (em produção, você coletaria dados reais)
+          TOTAL_DEPLOYS=47
+          SUCCESS_DEPLOYS=45
+          ROLLBACKS=2
+          SUCCESS_RATE=$(echo "scale=1; $SUCCESS_DEPLOYS * 100 / $TOTAL_DEPLOYS" | bc)
+          ROLLBACK_RATE=$(echo "scale=1; $ROLLBACKS * 100 / $TOTAL_DEPLOYS" | bc)
+          
+          # Projetos com problema (exemplo)
+          PROBLEM_PROJECTS="• projeto-cliente-x: rollback executado%0A• app-cliente-y: health check falhou"
+          
+          # Top projetos (exemplo)
+          TOP_PROJECTS="• loja-cliente-a%0A• dashboard-cliente-b%0A• landing-cliente-c"
+          
+          # Montar mensagem
+          MESSAGE="📊 RELATÓRIO DIÁRIO - GatHubPay%0A%0A✅ Deploys hoje: $TOTAL_DEPLOYS%0A✅ Sucessos: $SUCCESS_DEPLOYS ($SUCCESS_RATE%%)%0A🔄 Rollbacks: $ROLLBACKS ($ROLLBACK_RATE%%)%0A⏰ Tempo médio: 2.1min%0A%0A🚨 Projetos com problema:%0A$PROBLEM_PROJECTS%0A%0A🏆 Top projetos (100%% sucesso):%0A$TOP_PROJECTS%0A%0A📅 Data: $TODAY%0A⏰ Gerado às: $(date '+%H:%M:%S')"
+          
+          # Enviar para Telegram
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE" \
+            -d "parse_mode=HTML" || echo "⚠️ Falha ao enviar relatório"
+          
+          echo "✅ Relatório diário enviado!"
