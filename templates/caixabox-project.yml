@@ -12,7 +12,7 @@ on:
 
 jobs:
   deploy:
-    uses: GatHubPay/vercel-rollback-workflows/.github/workflows/vercel-rollback.yml@v1.1.0
+    uses: GatHubPay/vercel-rollback-workflows/.github/workflows/vercel-rollback.yml@main
     with:
       # ⬇️ OBRIGATÓRIO: Nome do seu projeto no Vercel
       vercelProject: "rasparei"
