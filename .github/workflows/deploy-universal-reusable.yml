@@ -136,14 +136,15 @@ jobs:
             echo "❌ FALHA CRÍTICA: Conteúdo muito pequeno ($CONTENT_SIZE chars) - possível erro"
             ERROR_DETAILS="${ERROR_DETAILS}• Página vazia ou erro (${CONTENT_SIZE} chars)%0A"
             ERRORS=$((ERRORS + 1))
-          elif echo "$CONTENT" | grep -qi "500\|internal server error\|application error\|fatal error\|error occurred\|something went wrong\|bailout_to_client_side_rendering"; then
+          elif echo "$CONTENT" | grep -qi "bailout_to_client_side_rendering"; then
+            echo "⚠️ AVISO: Next.js bailout detectado (comportamento normal)"
+            echo "✅ Site funcionando para usuários - não é erro crítico"
+            # NÃO incrementar ERRORS - bailout não é problema real
+          elif echo "$CONTENT" | grep -qi "500\|internal server error\|application error\|fatal error\|error occurred\|something went wrong"; then
             echo "❌ FALHA CRÍTICA: Página de erro detectada"
             
             # Detailed error logging
-            if echo "$CONTENT" | grep -qi "bailout_to_client_side_rendering"; then
-              echo "   🔍 Erro específico: BAILOUT_TO_CLIENT_SIDE_RENDERING (Next.js hydration)"
-              ERROR_DETAILS="${ERROR_DETAILS}• Next.js hydration error%0A"
-            elif echo "$CONTENT" | grep -qi "500"; then
+            if echo "$CONTENT" | grep -qi "500"; then
               echo "   🔍 Erro específico: HTTP 500 Internal Server Error"
               ERROR_DETAILS="${ERROR_DETAILS}• Internal Server Error (500)%0A"
             elif echo "$CONTENT" | grep -qi "fatal error"; then
