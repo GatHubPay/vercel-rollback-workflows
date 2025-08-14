@@ -175,40 +175,58 @@ jobs:
           
           npm install -g vercel@latest
           
-          echo "🔍 Buscando deployment anterior..."
-          echo "📋 Listando últimos 10 deployments..."
-          DEPLOYMENTS=$(npx vercel ls rasparei --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" -m 10)
-          echo "$DEPLOYMENTS"
+          # 🧠 ROLLBACK INTELIGENTE - Identifica qual deployment é o atual vs anterior
+          echo "🔍 INICIANDO ROLLBACK INTELIGENTE..."
           
-          # Buscar APENAS deployments Ready para rollback
-          echo "🔍 Procurando deployments Ready para rollback..."
-          READY_DEPLOYMENTS=$(echo "$DEPLOYMENTS" | grep "● Ready" | grep "Production" || true)
-          echo "📋 Deployments Ready encontrados:"
-          echo "$READY_DEPLOYMENTS"
+          # 1. Pegar o deployment que ACABOU de ser criado (o quebrado)
+          echo "📋 1. Identificando deployment atual (quebrado)..."
+          CURRENT_DEPLOYMENT_URL="${{ steps.vercel-deploy.outputs.preview-url }}"
+          echo "🚨 Deployment atual (QUEBRADO): $CURRENT_DEPLOYMENT_URL"
           
-          # Contar quantos deployments Ready temos
-          READY_COUNT=$(echo "$READY_DEPLOYMENTS" | grep -c "https://" || echo "0")
-          echo "📊 Total de deployments Ready: $READY_COUNT"
+          # 2. Listar todos deployments para encontrar o anterior
+          echo "📋 2. Listando todos os deployments..."
+          ALL_DEPLOYMENTS=$(npx vercel ls rasparei --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" -m 20)
+          echo "$ALL_DEPLOYMENTS"
           
-          if [ "$READY_COUNT" -ge 2 ]; then
-            # Pegar o segundo deployment Ready (o primeiro é o atual que falhou)
-            PREVIOUS_URL=$(echo "$READY_DEPLOYMENTS" | sed -n '2p' | awk '{print $1}')
-            echo "🔄 Executando rollback para o deployment anterior: $PREVIOUS_URL"
-          elif [ "$READY_COUNT" -eq 1 ]; then
-            # Se só tem 1, usar ele mesmo (melhor que nada)
-            PREVIOUS_URL=$(echo "$READY_DEPLOYMENTS" | head -1 | awk '{print $1}')
-            echo "🔄 Só há 1 deployment Ready, usando ele: $PREVIOUS_URL"
+          # 3. Filtrar apenas deployments Ready de Production (excluindo o atual quebrado)
+          echo "🔍 3. Filtrando deployments Ready (excluindo o quebrado)..."
+          READY_DEPLOYMENTS=$(echo "$ALL_DEPLOYMENTS" | grep "● Ready" | grep "Production" || true)
+          
+          # 4. Remover o deployment atual da lista (o quebrado)
+          SAFE_DEPLOYMENTS=""
+          while IFS= read -r line; do
+            if [[ -n "$line" ]]; then
+              DEPLOYMENT_URL=$(echo "$line" | awk '{print $1}')
+              if [[ "$DEPLOYMENT_URL" != "$CURRENT_DEPLOYMENT_URL" ]]; then
+                SAFE_DEPLOYMENTS="$SAFE_DEPLOYMENTS$line"$'\n'
+              else
+                echo "🚫 Pulando deployment quebrado: $DEPLOYMENT_URL"
+              fi
+            fi
+          done <<< "$READY_DEPLOYMENTS"
+          
+          echo "✅ Deployments SEGUROS disponíveis:"
+          echo "$SAFE_DEPLOYMENTS"
+          
+          # 5. Pegar o primeiro deployment seguro (mais recente que não é o quebrado)
+          ROLLBACK_URL=$(echo "$SAFE_DEPLOYMENTS" | head -1 | awk '{print $1}')
+          
+          if [[ -n "$ROLLBACK_URL" && "$ROLLBACK_URL" != "" ]]; then
+            echo "🎯 ROLLBACK TARGET IDENTIFICADO: $ROLLBACK_URL"
+            echo "🔄 Executando rollback para deployment seguro..."
+            
+            npx vercel promote "$ROLLBACK_URL" --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" --yes
           else
-            echo "❌ Nenhum deployment Ready encontrado"
+            echo "❌ ERRO CRÍTICO: Nenhum deployment seguro encontrado!"
+            echo "🔍 Possíveis causas:"
+            echo "   • Todos deployments Ready são o atual (quebrado)"
+            echo "   • Não há deployments anteriores Ready"
+            echo "   • Problema na filtragem dos deployments"
             echo "executed=false" >> $GITHUB_OUTPUT
-            exit 0
+            exit 1
           fi
           
-          # Executar o rollback
-          if [ -n "$PREVIOUS_URL" ]; then
-            npx vercel promote "$PREVIOUS_URL" --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" --yes
-            
-            if [ $? -eq 0 ]; then
+          if [ $? -eq 0 ]; then
               echo "✅ ROLLBACK EXECUTADO!"
               echo "🧪 Aguardando 30s para estabilizar..."
               sleep 30

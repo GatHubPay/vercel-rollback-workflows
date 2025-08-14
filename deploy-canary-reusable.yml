@@ -1,0 +1,369 @@
+# 🏢 Canary Deploy Reutilizável - Para Softhouse
+# Deploy gradual: 5% → 100% com health check profissional
+
+name: Canary Deploy Professional
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        description: 'Nome do projeto no Vercel'
+        required: true
+        type: string
+      site_url:
+        description: 'URL do site (com https://)'
+        required: true
+        type: string
+      canary_percentage:
+        description: 'Porcentagem inicial do canary (5-50)'
+        required: false
+        type: number
+        default: 5
+      canary_duration:
+        description: 'Duração do canary em segundos'
+        required: false
+        type: number
+        default: 600
+      skip_canary:
+        description: 'Pular canary e ir direto para 100%'
+        required: false
+        type: boolean
+        default: false
+      error_threshold:
+        description: 'Taxa de erro máxima permitida (%)'
+        required: false
+        type: number
+        default: 0.5
+      latency_threshold:
+        description: 'Latência máxima permitida (ms)'
+        required: false
+        type: number
+        default: 3000
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+      VERCEL_TEAM_ID:
+        required: true
+      VERCEL_SCOPE:
+        required: true
+      TELEGRAM_BOT_TOKEN:
+        required: true
+      TELEGRAM_CHAT_ID:
+        required: true
+    outputs:
+      deployment_url:
+        description: "URL do deployment"
+        value: ${{ jobs.deploy.outputs.preview-url }}
+      canary_success:
+        description: "Se o canary foi bem-sucedido"
+        value: ${{ jobs.canary-monitor.outputs.canary_passed }}
+
+jobs:
+  # 🚀 DEPLOY INICIAL (CANARY)
+  deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      preview-url: ${{ steps.deploy.outputs.preview-url }}
+      
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🎯 Deploy Canary
+        uses: amondnet/vercel-action@v25
+        id: deploy
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_TEAM_ID }}
+          vercel-project-id: ${{ inputs.project_name }}
+
+      - name: 📱 Notificar Canary Iniciado
+        if: ${{ !inputs.skip_canary }}
+        run: |
+          MESSAGE="🎯 CANARY DEPLOY INICIADO%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A📊 Canary: ${{ inputs.canary_percentage }}%% dos usuários%0A⏰ Monitoramento: ${{ inputs.canary_duration }}s%0A🔗 URL: ${{ steps.deploy.outputs.preview-url }}%0A📝 Commit: ${GITHUB_SHA:0:7}%0A%0A🏢 Deploy estilo Big Companies!"
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=$MESSAGE"
+
+      - name: 📱 Notificar Deploy Direto
+        if: ${{ inputs.skip_canary }}
+        run: |
+          MESSAGE="🚀 DEPLOY DIRETO INICIADO%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A📊 Deploy: 100%% direto (canary pulado)%0A🔗 URL: ${{ steps.deploy.outputs.preview-url }}%0A📝 Commit: ${GITHUB_SHA:0:7}%0A%0A🏢 Deploy estilo Big Companies!"
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=$MESSAGE"
+
+  # 📊 MONITOR CANARY (só se não pular)
+  canary-monitor:
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: ${{ !inputs.skip_canary }}
+    outputs:
+      canary_passed: ${{ steps.monitor.outputs.canary_passed }}
+      error_rate: ${{ steps.monitor.outputs.error_rate }}
+      avg_latency: ${{ steps.monitor.outputs.avg_latency }}
+      total_requests: ${{ steps.monitor.outputs.total_requests }}
+      
+    steps:
+      - name: 📊 Monitorar Canary
+        id: monitor
+        run: |
+          echo "📊 INICIANDO MONITORAMENTO CANARY..."
+          echo "🎯 URL: ${{ needs.deploy.outputs.preview-url }}"
+          echo "⏰ Duração: ${{ inputs.canary_duration }}s"
+          echo "🚨 Limite erro: ${{ inputs.error_threshold }}%"
+          echo "⚡ Limite latência: ${{ inputs.latency_threshold }}ms"
+          
+          TOTAL_REQUESTS=0
+          TOTAL_ERRORS=0
+          TOTAL_LATENCY=0
+          MONITOR_DURATION=${{ inputs.canary_duration }}
+          CHECK_INTERVAL=30
+          CHECKS=$((MONITOR_DURATION / CHECK_INTERVAL))
+          
+          echo "🔄 Fazendo $CHECKS verificações a cada ${CHECK_INTERVAL}s..."
+          
+          for i in $(seq 1 $CHECKS); do
+            echo "📊 Check $i/$CHECKS..."
+            
+            # Fazer requisição e medir tempo
+            START_TIME=$(date +%s%N)
+            RESPONSE=$(curl -s -w "%{http_code}" -o /dev/null --max-time 10 "${{ needs.deploy.outputs.preview-url }}" || echo "000")
+            END_TIME=$(date +%s%N)
+            
+            LATENCY=$(( (END_TIME - START_TIME) / 1000000 )) # Convert to ms
+            TOTAL_REQUESTS=$((TOTAL_REQUESTS + 1))
+            TOTAL_LATENCY=$((TOTAL_LATENCY + LATENCY))
+            
+            echo "   Status: $RESPONSE | Latência: ${LATENCY}ms"
+            
+            # Contar erro se não for 200
+            if [[ "$RESPONSE" != "200" ]]; then
+              TOTAL_ERRORS=$((TOTAL_ERRORS + 1))
+              echo "   ❌ Erro detectado!"
+            fi
+            
+            # Aguardar próximo check (exceto no último)
+            if [[ $i -lt $CHECKS ]]; then
+              sleep $CHECK_INTERVAL
+            fi
+          done
+          
+          # Calcular métricas finais
+          if [[ $TOTAL_REQUESTS -gt 0 ]]; then
+            ERROR_RATE=$(echo "scale=2; $TOTAL_ERRORS * 100 / $TOTAL_REQUESTS" | bc -l)
+            AVG_LATENCY=$((TOTAL_LATENCY / TOTAL_REQUESTS))
+          else
+            ERROR_RATE=100
+            AVG_LATENCY=9999
+          fi
+          
+          echo "📊 RESULTADO DO CANARY:"
+          echo "   📈 Total requests: $TOTAL_REQUESTS"
+          echo "   ❌ Total errors: $TOTAL_ERRORS"
+          echo "   📊 Error rate: ${ERROR_RATE}%"
+          echo "   ⚡ Avg latency: ${AVG_LATENCY}ms"
+          
+          # Verificar se passou nos critérios
+          CANARY_PASSED=true
+          
+          if (( $(echo "$ERROR_RATE > ${{ inputs.error_threshold }}" | bc -l) )); then
+            echo "❌ CANARY REPROVADO: Taxa de erro ${ERROR_RATE}% > ${{ inputs.error_threshold }}%"
+            CANARY_PASSED=false
+          fi
+          
+          if [[ $AVG_LATENCY -gt ${{ inputs.latency_threshold }} ]]; then
+            echo "❌ CANARY REPROVADO: Latência ${AVG_LATENCY}ms > ${{ inputs.latency_threshold }}ms"
+            CANARY_PASSED=false
+          fi
+          
+          if [[ "$CANARY_PASSED" == "true" ]]; then
+            echo "✅ CANARY APROVADO! Pode ir para produção."
+          else
+            echo "❌ CANARY REPROVADO! Não pode ir para produção."
+          fi
+          
+          # Outputs
+          echo "canary_passed=$CANARY_PASSED" >> $GITHUB_OUTPUT
+          echo "error_rate=$ERROR_RATE" >> $GITHUB_OUTPUT
+          echo "avg_latency=$AVG_LATENCY" >> $GITHUB_OUTPUT
+          echo "total_requests=$TOTAL_REQUESTS" >> $GITHUB_OUTPUT
+
+  # 🚀 DEPLOY PRODUÇÃO (se canary passou ou foi pulado)
+  production-deploy:
+    runs-on: ubuntu-latest
+    needs: [deploy, canary-monitor]
+    if: always() && (inputs.skip_canary || needs.canary-monitor.outputs.canary_passed == 'true')
+    outputs:
+      production-url: ${{ steps.production.outputs.preview-url }}
+      
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy Produção (100%)
+        uses: amondnet/vercel-action@v25
+        id: production
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_TEAM_ID }}
+          vercel-project-id: ${{ inputs.project_name }}
+          vercel-args: '--prod'
+
+      - name: ⏳ Aguardar Deploy Produção
+        run: |
+          echo "⏳ Aguardando deploy de PRODUÇÃO ficar disponível..."
+          echo "🌐 Deploy será promovido automaticamente para ${{ inputs.site_url }}"
+          sleep 45
+
+  # 🔍 HEALTH CHECK PRODUÇÃO
+  production-health-check:
+    runs-on: ubuntu-latest
+    needs: [deploy, canary-monitor, production-deploy]
+    if: always() && needs.production-deploy.result == 'success'
+    outputs:
+      health_check_passed: ${{ steps.health-check.outputs.health_check_passed }}
+      error_details: ${{ steps.health-check.outputs.error_details }}
+      status_code: ${{ steps.health-check.outputs.status_code }}
+      response_time: ${{ steps.health-check.outputs.response_time }}
+      
+    steps:
+      - name: 🔍 Health Check Produção
+        id: health-check
+        run: |
+          echo "🔍 HEALTH CHECK PRODUÇÃO..."
+          echo "🎯 URL: ${{ inputs.site_url }}"
+          
+          ERRORS=0
+          ERROR_DETAILS=""
+          
+          # 1. AVAILABILITY CHECK
+          RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};TIME:%{time_total}" --max-time 10 "${{ inputs.site_url }}" || echo "HTTPSTATUS:000;TIME:999")
+          STATUS=$(echo $RESPONSE | grep -o "HTTPSTATUS:[0-9]*" | cut -d: -f2)
+          TIME=$(echo $RESPONSE | grep -o "TIME:[0-9.]*" | cut -d: -f2)
+          
+          if [[ "$STATUS" != "200" ]]; then
+            echo "❌ FALHA CRÍTICA: Site não responde (HTTP $STATUS)"
+            ERROR_DETAILS="${ERROR_DETAILS}• HTTP $STATUS (site offline)%0A"
+            ERRORS=$((ERRORS + 1))
+          elif (( $(echo "$TIME > 5.0" | bc -l 2>/dev/null || echo "0") )); then
+            echo "❌ FALHA CRÍTICA: Site muito lento (${TIME}s > 5s)"
+            ERROR_DETAILS="${ERROR_DETAILS}• Tempo resposta: ${TIME}s (>5s)%0A"
+            ERRORS=$((ERRORS + 1))
+          fi
+          
+          # 2. CONTENT CHECK
+          CONTENT=$(curl -s --max-time 10 "${{ inputs.site_url }}" || echo "")
+          CONTENT_SIZE=${#CONTENT}
+          
+          if [[ $CONTENT_SIZE -lt 1000 ]]; then
+            echo "❌ FALHA CRÍTICA: Conteúdo muito pequeno - possível erro"
+            ERROR_DETAILS="${ERROR_DETAILS}• Página vazia ou erro%0A"
+            ERRORS=$((ERRORS + 1))
+          elif echo "$CONTENT" | grep -qi "500\|internal server error\|application error\|fatal error\|error occurred\|something went wrong\|bailout_to_client_side_rendering"; then
+            echo "❌ FALHA CRÍTICA: Página de erro detectada"
+            ERROR_DETAILS="${ERROR_DETAILS}• Página de erro detectada%0A"
+            ERRORS=$((ERRORS + 1))
+          fi
+          
+          # RESULTADO
+          if [[ $ERRORS -eq 0 ]]; then
+            echo "✅ PRODUÇÃO OK!"
+            echo "health_check_passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ PRODUÇÃO FALHOU!"
+            echo "health_check_passed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "error_details=$ERROR_DETAILS" >> $GITHUB_OUTPUT
+          echo "status_code=$STATUS" >> $GITHUB_OUTPUT
+          echo "response_time=$TIME" >> $GITHUB_OUTPUT
+
+  # 🔄 ROLLBACK (se produção falhar)
+  rollback:
+    runs-on: ubuntu-latest
+    needs: [deploy, canary-monitor, production-deploy, production-health-check]
+    if: always() && (needs.canary-monitor.outputs.canary_passed == 'false' || needs.production-health-check.outputs.health_check_passed == 'false')
+    outputs:
+      executed: ${{ steps.rollback.outputs.executed }}
+      
+    steps:
+      - name: 🔄 Rollback Automático Inteligente
+        id: rollback
+        run: |
+          echo "🚨 EXECUTANDO ROLLBACK AUTOMÁTICO..."
+          npm install -g vercel@latest
+          
+          # Rollback inteligente (mesmo do workflow anterior)
+          CURRENT_DEPLOYMENT_URL="${{ needs.deploy.outputs.preview-url }}"
+          echo "🚨 Deployment atual (QUEBRADO): $CURRENT_DEPLOYMENT_URL"
+          
+          ALL_DEPLOYMENTS=$(npx vercel ls ${{ inputs.project_name }} --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" -m 20)
+          READY_DEPLOYMENTS=$(echo "$ALL_DEPLOYMENTS" | grep "● Ready" | grep "Production" || true)
+          
+          SAFE_DEPLOYMENTS=""
+          while IFS= read -r line; do
+            if [[ -n "$line" ]]; then
+              DEPLOYMENT_URL=$(echo "$line" | awk '{print $1}')
+              if [[ "$DEPLOYMENT_URL" != "$CURRENT_DEPLOYMENT_URL" ]]; then
+                SAFE_DEPLOYMENTS="$SAFE_DEPLOYMENTS$line"$'\n'
+              fi
+            fi
+          done <<< "$READY_DEPLOYMENTS"
+          
+          ROLLBACK_URL=$(echo "$SAFE_DEPLOYMENTS" | head -1 | awk '{print $1}')
+          
+          if [[ -n "$ROLLBACK_URL" && "$ROLLBACK_URL" != "" ]]; then
+            echo "🎯 ROLLBACK TARGET: $ROLLBACK_URL"
+            npx vercel promote "$ROLLBACK_URL" --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" --yes
+            
+            if [ $? -eq 0 ]; then
+              echo "✅ ROLLBACK EXECUTADO!"
+              echo "executed=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ ROLLBACK FALHOU"
+              echo "executed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ Nenhum deployment seguro encontrado"
+            echo "executed=false" >> $GITHUB_OUTPUT
+          fi
+
+  # 📱 NOTIFICAÇÃO FINAL
+  notify:
+    runs-on: ubuntu-latest
+    needs: [deploy, canary-monitor, production-deploy, production-health-check, rollback]
+    if: always()
+    
+    steps:
+      - name: 📱 Notificar Resultado Final
+        run: |
+          CANARY_ENABLED="${{ !inputs.skip_canary }}"
+          CANARY_PASSED="${{ needs.canary-monitor.outputs.canary_passed }}"
+          PRODUCTION_PASSED="${{ needs.production-health-check.outputs.health_check_passed }}"
+          ERROR_DETAILS="${{ needs.production-health-check.outputs.error_details }}"
+          STATUS_CODE="${{ needs.production-health-check.outputs.status_code }}"
+          RESPONSE_TIME="${{ needs.production-health-check.outputs.response_time }}"
+          ROLLBACK_EXECUTED="${{ needs.rollback.outputs.executed || 'não executado' }}"
+          
+          if [[ "$CANARY_ENABLED" == "false" ]]; then
+            # Deploy direto sem canary
+            if [[ "$PRODUCTION_PASSED" == "true" ]]; then
+              MESSAGE="✅ DEPLOY DIRETO OK: ${{ inputs.project_name }}%0A%0A🚀 Deploy 100%% sem canary%0A📊 Status: $STATUS_CODE%0A⚡ Tempo: ${RESPONSE_TIME}s%0A🌐 ${{ inputs.site_url }}%0A📝 Commit: ${GITHUB_SHA:0:7}%0A%0A🏢 Deploy estilo Big Companies!"
+            else
+              MESSAGE="🚨 DEPLOY DIRETO FALHOU: ${{ inputs.project_name }}%0A%0A❌ Health check falhou%0A🔍 Erro: $ERROR_DETAILS%0A📊 Status: $STATUS_CODE%0A🔄 Rollback: $ROLLBACK_EXECUTED%0A📝 Commit: ${GITHUB_SHA:0:7}%0A🔥 INTERVENÇÃO NECESSÁRIA!"
+            fi
+          else
+            # Deploy com canary
+            if [[ "$CANARY_PASSED" == "true" && "$PRODUCTION_PASSED" == "true" ]]; then
+              ERROR_RATE="${{ needs.canary-monitor.outputs.error_rate }}"
+              AVG_LATENCY="${{ needs.canary-monitor.outputs.avg_latency }}"
+              TOTAL_REQUESTS="${{ needs.canary-monitor.outputs.total_requests }}"
+              MESSAGE="🎯 CANARY DEPLOY SUCESSO: ${{ inputs.project_name }}%0A%0A✅ Canary aprovado (erro: ${ERROR_RATE}%%)%0A✅ Produção funcionando%0A⚡ Latência canary: ${AVG_LATENCY}ms%0A📊 Requests canary: $TOTAL_REQUESTS%0A📊 Status produção: $STATUS_CODE%0A⚡ Tempo produção: ${RESPONSE_TIME}s%0A🌐 100%% dos usuários protegidos%0A📝 Commit: ${GITHUB_SHA:0:7}%0A%0A🏢 Deploy estilo Big Companies!"
+            elif [[ "$CANARY_PASSED" == "false" ]]; then
+              ERROR_RATE="${{ needs.canary-monitor.outputs.error_rate }}"
+              AVG_LATENCY="${{ needs.canary-monitor.outputs.avg_latency }}"
+              TOTAL_REQUESTS="${{ needs.canary-monitor.outputs.total_requests }}"
+              MESSAGE="🚨 CANARY REPROVADO: ${{ inputs.project_name }}%0A%0A❌ Canary falhou (erro: ${ERROR_RATE}%%)%0A⚡ Latência: ${AVG_LATENCY}ms%0A📊 Requests: $TOTAL_REQUESTS%0A🔄 Rollback: $ROLLBACK_EXECUTED%0A📝 Commit: ${GITHUB_SHA:0:7}%0A%0A✅ 95%% DOS USUÁRIOS PROTEGIDOS!"
+            else # Production failed after canary passed
+              MESSAGE="🚨 PRODUÇÃO FALHOU: ${{ inputs.project_name }}%0A%0A✅ Canary passou%0A❌ Produção falhou%0A🔍 Erro: $ERROR_DETAILS%0A📊 Status: $STATUS_CODE%0A🔄 Rollback: $ROLLBACK_EXECUTED%0A📝 Commit: ${GITHUB_SHA:0:7}%0A🔥 INTERVENÇÃO NECESSÁRIA!"
+            fi
+          fi
+          
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=$MESSAGE"

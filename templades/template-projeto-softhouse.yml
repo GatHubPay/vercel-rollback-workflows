@@ -1,0 +1,29 @@
+# 🏢 Template para Projetos da Softhouse
+# Copie este arquivo para: .github/workflows/deploy.yml
+
+name: Deploy Projeto
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: SuaSofthouse/workflows/.github/workflows/deploy-universal-reusable.yml@main
+    with:
+      # 🎯 CONFIGURE APENAS ESTAS 2 LINHAS:
+      project_name: "NOME_DO_PROJETO"           # ← Mude aqui
+      site_url: "https://SEU_SITE.com/"         # ← Mude aqui
+      
+      # ⚙️ OPCIONAIS (use os padrões ou customize):
+      environment: "production"                  # production/staging
+      health_check_timeout: 30                   # segundos
+      enable_rollback: true                      # true/false
+      
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

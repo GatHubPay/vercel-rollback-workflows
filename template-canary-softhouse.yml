@@ -1,0 +1,41 @@
+# 🏢 Template Canary para Projetos da Softhouse
+# Copie este arquivo para: .github/workflows/deploy-canary.yml
+
+name: Canary Deploy Projeto
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      canary_percentage:
+        description: 'Porcentagem inicial do canary (5-50)'
+        required: false
+        default: '5'
+      skip_canary:
+        description: 'Pular canary e ir direto para 100%'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  canary-deploy:
+    uses: SuaSofthouse/workflows/.github/workflows/deploy-canary-reusable.yml@main
+    with:
+      # 🎯 CONFIGURE APENAS ESTAS 2 LINHAS:
+      project_name: "NOME_DO_PROJETO"           # ← Mude aqui
+      site_url: "https://SEU_SITE.com/"         # ← Mude aqui
+      
+      # 📊 CONFIGURAÇÕES CANARY (opcionais):
+      canary_percentage: ${{ github.event.inputs.canary_percentage || 5 }}
+      canary_duration: 600                       # 10 minutos de canary
+      skip_canary: ${{ github.event.inputs.skip_canary || false }}
+      error_threshold: 0.5                       # 0.5% erro máximo
+      latency_threshold: 3000                    # 3000ms latência máxima
+      
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

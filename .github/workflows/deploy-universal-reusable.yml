@@ -1,0 +1,284 @@
+# 🏢 Deploy Universal Reutilizável - Para Softhouse
+# Usado por TODOS os projetos da empresa
+
+name: Deploy Universal Professional
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        description: 'Nome do projeto no Vercel'
+        required: true
+        type: string
+      site_url:
+        description: 'URL do site (com https://)'
+        required: true
+        type: string
+      environment:
+        description: 'Ambiente (production/staging)'
+        required: false
+        type: string
+        default: 'production'
+      health_check_timeout:
+        description: 'Timeout do health check em segundos'
+        required: false
+        type: number
+        default: 30
+      enable_rollback:
+        description: 'Ativar rollback automático'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+      VERCEL_TEAM_ID:
+        required: true
+      VERCEL_SCOPE:
+        required: true
+      TELEGRAM_BOT_TOKEN:
+        required: true
+      TELEGRAM_CHAT_ID:
+        required: true
+    outputs:
+      deployment_url:
+        description: "URL do deployment"
+        value: ${{ jobs.deploy.outputs.preview-url }}
+      health_check_status:
+        description: "Status do health check"
+        value: ${{ jobs.health-check.outputs.health_check_passed }}
+
+jobs:
+  # 🚀 DEPLOY
+  deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      preview-url: ${{ steps.vercel-deploy.outputs.preview-url }}
+      
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        id: vercel-deploy
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_TEAM_ID }}
+          vercel-project-id: ${{ inputs.project_name }}
+          vercel-args: '--prod'
+
+      - name: ⏳ Aguardar Deploy
+        run: |
+          echo "⏳ Aguardando deploy de ${{ inputs.environment }} ficar disponível..."
+          echo "🌐 Deploy será promovido automaticamente para ${{ inputs.site_url }}"
+          sleep 45
+
+      - name: 📱 Notificar Deploy Iniciado
+        run: |
+          MESSAGE="🚀 Deploy ${{ inputs.environment }} iniciado%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A🌐 Site: ${{ inputs.site_url }}%0A📊 Commit: ${GITHUB_SHA:0:7}%0A👤 Por: ${{ github.actor }}%0A🔄 Aguardando health check..."
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=$MESSAGE"
+
+  # 🔍 HEALTH CHECK PROFISSIONAL
+  health-check:
+    runs-on: ubuntu-latest
+    needs: deploy
+    outputs:
+      health_check_passed: ${{ steps.health-check.outputs.health_check_passed }}
+      error_details: ${{ steps.health-check.outputs.error_details }}
+      status_code: ${{ steps.health-check.outputs.status_code }}
+      response_time: ${{ steps.health-check.outputs.response_time }}
+      
+    steps:
+      - name: 🔍 Health Check Profissional
+        id: health-check
+        run: |
+          echo "🔍 INICIANDO HEALTH CHECK PROFISSIONAL..."
+          echo "🎯 URL: ${{ inputs.site_url }}"
+          echo "⏰ Timeout: ${{ inputs.health_check_timeout }}s"
+          
+          ERRORS=0
+          ERROR_DETAILS=""
+          
+          # 1. AVAILABILITY CHECK
+          echo "📊 1. Testando disponibilidade..."
+          RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};TIME:%{time_total}" --max-time ${{ inputs.health_check_timeout }} "${{ inputs.site_url }}" || echo "HTTPSTATUS:000;TIME:999")
+          STATUS=$(echo $RESPONSE | grep -o "HTTPSTATUS:[0-9]*" | cut -d: -f2)
+          TIME=$(echo $RESPONSE | grep -o "TIME:[0-9.]*" | cut -d: -f2)
+          
+          echo "📊 Status HTTP: $STATUS"
+          echo "⚡ Tempo resposta: ${TIME}s"
+          
+          if [[ "$STATUS" != "200" ]]; then
+            echo "❌ FALHA CRÍTICA: Site não responde (HTTP $STATUS)"
+            ERROR_DETAILS="${ERROR_DETAILS}• HTTP $STATUS (site offline)%0A"
+            ERRORS=$((ERRORS + 1))
+          elif (( $(echo "$TIME > 5.0" | bc -l 2>/dev/null || echo "0") )); then
+            echo "❌ FALHA CRÍTICA: Site muito lento (${TIME}s > 5s)"
+            ERROR_DETAILS="${ERROR_DETAILS}• Tempo resposta: ${TIME}s (>5s)%0A"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✅ Site disponível e rápido"
+          fi
+          
+          # 2. BASIC CONTENT CHECK
+          echo "📊 2. Verificando conteúdo..."
+          CONTENT=$(curl -s --max-time ${{ inputs.health_check_timeout }} "${{ inputs.site_url }}" || echo "")
+          CONTENT_SIZE=${#CONTENT}
+          
+          if [[ $CONTENT_SIZE -lt 1000 ]]; then
+            echo "❌ FALHA CRÍTICA: Conteúdo muito pequeno ($CONTENT_SIZE chars) - possível erro"
+            ERROR_DETAILS="${ERROR_DETAILS}• Página vazia ou erro (${CONTENT_SIZE} chars)%0A"
+            ERRORS=$((ERRORS + 1))
+          elif echo "$CONTENT" | grep -qi "500\|internal server error\|application error\|fatal error\|error occurred\|something went wrong\|bailout_to_client_side_rendering"; then
+            echo "❌ FALHA CRÍTICA: Página de erro detectada"
+            
+            # Detailed error logging
+            if echo "$CONTENT" | grep -qi "bailout_to_client_side_rendering"; then
+              echo "   🔍 Erro específico: BAILOUT_TO_CLIENT_SIDE_RENDERING (Next.js hydration)"
+              ERROR_DETAILS="${ERROR_DETAILS}• Next.js hydration error%0A"
+            elif echo "$CONTENT" | grep -qi "500"; then
+              echo "   🔍 Erro específico: HTTP 500 Internal Server Error"
+              ERROR_DETAILS="${ERROR_DETAILS}• Internal Server Error (500)%0A"
+            elif echo "$CONTENT" | grep -qi "fatal error"; then
+              echo "   🔍 Erro específico: Fatal Error detectado"
+              ERROR_DETAILS="${ERROR_DETAILS}• Fatal Error na aplicação%0A"
+            else
+              ERROR_DETAILS="${ERROR_DETAILS}• Página de erro genérica%0A"
+            fi
+            
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✅ Conteúdo válido (${CONTENT_SIZE} chars)"
+          fi
+          
+          # 3. RESULTADO FINAL
+          if [[ $ERRORS -eq 0 ]]; then
+            echo "✅ HEALTH CHECK PASSOU - Site funcionando!"
+            echo "health_check_passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ HEALTH CHECK FALHOU - $ERRORS erros críticos detectados"
+            echo "health_check_passed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Outputs para outros jobs
+          echo "error_details=$ERROR_DETAILS" >> $GITHUB_OUTPUT
+          echo "status_code=$STATUS" >> $GITHUB_OUTPUT
+          echo "response_time=$TIME" >> $GITHUB_OUTPUT
+
+  # 🔄 ROLLBACK AUTOMÁTICO (se habilitado)
+  rollback:
+    runs-on: ubuntu-latest
+    needs: [deploy, health-check]
+    if: always() && inputs.enable_rollback && needs.health-check.result == 'failure'
+    outputs:
+      executed: ${{ steps.rollback.outputs.executed }}
+      
+    steps:
+      - name: 🔄 Rollback Automático Inteligente
+        id: rollback
+        run: |
+          echo "🚨 EXECUTANDO ROLLBACK AUTOMÁTICO..."
+          echo "Deploy automático falhou - revertendo para versão anterior"
+          
+          npm install -g vercel@latest
+          
+          # 🧠 ROLLBACK INTELIGENTE - Identifica qual deployment é o atual vs anterior
+          echo "🔍 INICIANDO ROLLBACK INTELIGENTE..."
+          
+          # 1. Pegar o deployment que ACABOU de ser criado (o quebrado)
+          echo "📋 1. Identificando deployment atual (quebrado)..."
+          CURRENT_DEPLOYMENT_URL="${{ needs.deploy.outputs.preview-url }}"
+          echo "🚨 Deployment atual (QUEBRADO): $CURRENT_DEPLOYMENT_URL"
+          
+          # 2. Listar todos deployments para encontrar o anterior
+          echo "📋 2. Listando todos os deployments..."
+          ALL_DEPLOYMENTS=$(npx vercel ls ${{ inputs.project_name }} --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" -m 20)
+          echo "$ALL_DEPLOYMENTS"
+          
+          # 3. Filtrar apenas deployments Ready de Production (excluindo o atual quebrado)
+          echo "🔍 3. Filtrando deployments Ready (excluindo o quebrado)..."
+          READY_DEPLOYMENTS=$(echo "$ALL_DEPLOYMENTS" | grep "● Ready" | grep "Production" || true)
+          
+          # 4. Remover o deployment atual da lista (o quebrado)
+          SAFE_DEPLOYMENTS=""
+          while IFS= read -r line; do
+            if [[ -n "$line" ]]; then
+              DEPLOYMENT_URL=$(echo "$line" | awk '{print $1}')
+              if [[ "$DEPLOYMENT_URL" != "$CURRENT_DEPLOYMENT_URL" ]]; then
+                SAFE_DEPLOYMENTS="$SAFE_DEPLOYMENTS$line"$'\n'
+              else
+                echo "🚫 Pulando deployment quebrado: $DEPLOYMENT_URL"
+              fi
+            fi
+          done <<< "$READY_DEPLOYMENTS"
+          
+          echo "✅ Deployments SEGUROS disponíveis:"
+          echo "$SAFE_DEPLOYMENTS"
+          
+          # 5. Pegar o primeiro deployment seguro (mais recente que não é o quebrado)
+          ROLLBACK_URL=$(echo "$SAFE_DEPLOYMENTS" | head -1 | awk '{print $1}')
+          
+          if [[ -n "$ROLLBACK_URL" && "$ROLLBACK_URL" != "" ]]; then
+            echo "🎯 ROLLBACK TARGET IDENTIFICADO: $ROLLBACK_URL"
+            echo "🔄 Executando rollback para deployment seguro..."
+            
+            npx vercel promote "$ROLLBACK_URL" --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" --yes
+          else
+            echo "❌ ERRO CRÍTICO: Nenhum deployment seguro encontrado!"
+            echo "🔍 Possíveis causas:"
+            echo "   • Todos deployments Ready são o atual (quebrado)"
+            echo "   • Não há deployments anteriores Ready"
+            echo "   • Problema na filtragem dos deployments"
+            echo "executed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ ROLLBACK EXECUTADO!"
+            echo "🧪 Aguardando 30s para estabilizar..."
+            sleep 30
+            
+            # Verificar se funcionou
+            ROLLBACK_STATUS=$(curl -s -w "%{http_code}" -o /dev/null --max-time 30 "${{ inputs.site_url }}" || echo "000")
+            
+            if [[ "$ROLLBACK_STATUS" == "200" ]]; then
+              echo "✅ ROLLBACK CONFIRMADO - Site funcionando!"
+              echo "executed=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ ROLLBACK FALHOU - Site ainda com problema (Status: $ROLLBACK_STATUS)"
+              echo "executed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ ROLLBACK FALHOU"
+            echo "executed=false" >> $GITHUB_OUTPUT
+          fi
+
+  # 📱 NOTIFICAÇÃO FINAL
+  notify:
+    runs-on: ubuntu-latest
+    needs: [deploy, health-check, rollback]
+    if: always()
+    
+    steps:
+      - name: 📱 Notificar Resultado Final
+        run: |
+          HEALTH_PASSED="${{ needs.health-check.outputs.health_check_passed }}"
+          ERROR_DETAILS="${{ needs.health-check.outputs.error_details }}"
+          STATUS_CODE="${{ needs.health-check.outputs.status_code }}"
+          RESPONSE_TIME="${{ needs.health-check.outputs.response_time }}"
+          ROLLBACK_EXECUTED="${{ needs.rollback.outputs.executed || 'não executado' }}"
+          
+          if [[ "$HEALTH_PASSED" == "true" ]]; then
+            # ✅ SUCESSO
+            MESSAGE="✅ ${{ inputs.project_name }} - FUNCIONANDO!%0A%0A🏢 Deploy profissional concluído%0A🌐 Site: ${{ inputs.site_url }}%0A📊 Status: $STATUS_CODE%0A⚡ Tempo: ${RESPONSE_TIME}s%0A📊 Commit: ${GITHUB_SHA:0:7}%0A%0A🎯 Deploy estilo Big Companies!"
+          else
+            # ❌ FALHA
+            if [[ "$ROLLBACK_EXECUTED" == "true" ]]; then
+              MESSAGE="🔄 ROLLBACK EXECUTADO!%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A🚨 Deploy falhou mas foi revertido%0A✅ Site funcionando (versão anterior)%0A🌐 ${{ inputs.site_url }}%0A📊 Status: $STATUS_CODE%0A📊 Commit: ${GITHUB_SHA:0:7}%0A%0A✅ USUÁRIOS PROTEGIDOS!"
+            else
+              MESSAGE="🚨 DEPLOY FALHOU!%0A%0A🏢 Projeto: ${{ inputs.project_name }}%0A❌ Health check falhou%0A🔍 Erro: $ERROR_DETAILS%0A📊 Status: $STATUS_CODE%0A⚡ Tempo: ${RESPONSE_TIME}s%0A🔄 Rollback: $ROLLBACK_EXECUTED%0A🌐 ${{ inputs.site_url }}%0A📊 Commit: ${GITHUB_SHA:0:7}%0A%0A🔥 INTERVENÇÃO NECESSÁRIA!"
+            fi
+          fi
+          
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage?chat_id=${{ secrets.TELEGRAM_CHAT_ID }}&text=$MESSAGE"
