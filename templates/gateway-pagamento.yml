@@ -1,0 +1,65 @@
+# 💳 Template Gateway de Pagamento - Deploy com Rollback Automático
+# 
+# Configuração ultra-robusta para sistemas de pagamento
+# Máxima confiabilidade e monitoramento estendido
+
+name: Deploy Gateway Pagamento
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: SeuUsuario/vercel-rollback-workflows/.github/workflows/vercel-rollback.yml@v1.0.0
+    with:
+      # ⬇️ OBRIGATÓRIO: Nome do seu projeto no Vercel
+      vercelProject: "gateway-pagamento-prod"
+      
+      # ⬇️ ROTAS CRÍTICAS PARA GATEWAY DE PAGAMENTO
+      routes: "/,/api/health,/api/payment,/api/webhook,/api/status,/api/refund,/api/validate"
+      
+      # ⬇️ CONFIGURAÇÕES MÁXIMA CONFIABILIDADE
+      healthCheckTimeout: 90        # Timeout muito alto para operações financeiras
+      maxRetries: 6                 # Máximo de tentativas para sistema crítico
+      enablePostDeployMonitoring: true
+      monitoringDurationMinutes: 90 # Monitoramento estendido (1.5 horas)
+      monitoringIntervalMinutes: 2  # Verificações muito frequentes
+      
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+
+# ========================================
+# ROTAS CRÍTICAS PARA GATEWAY DE PAGAMENTO
+# ========================================
+#
+# APIs Ultra-Críticas:
+# /api/payment - Processamento de pagamentos (CRÍTICO)
+# /api/webhook - Recebimento de notificações (CRÍTICO)
+# /api/status - Status de transações (CRÍTICO)
+# /api/refund - Sistema de estorno (CRÍTICO)
+# /api/validate - Validação de dados (CRÍTICO)
+# /api/health - Health check (OBRIGATÓRIO)
+#
+# Páginas de Suporte:
+# / - Landing/documentação da API
+# /docs - Documentação técnica
+# /status - Status page público
+#
+# ========================================
+# CONFIGURAÇÕES ESPECÍFICAS
+# ========================================
+#
+# ULTRA-CONSERVADOR para sistemas financeiros:
+# - Timeout altíssimo (90s) para operações complexas
+# - Máximo de tentativas (6) para evitar falsos positivos
+# - Monitoramento muito longo (90min) para detectar qualquer problema
+# - Verificações muito frequentes (2min) para resposta imediata
+#
+# IMPORTANTE: Gateway de pagamento NUNCA pode ter downtime
+# não detectado. Melhor falso positivo que falha real.
+#
+# ========================================

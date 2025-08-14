@@ -1,0 +1,72 @@
+# 🛒 Template Sistema de Checkout - Deploy com Rollback Automático
+# 
+# Otimizado para sistemas de checkout e finalização de compras
+# Configurações balanceadas para alta disponibilidade
+
+name: Deploy Sistema Checkout
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: SeuUsuario/vercel-rollback-workflows/.github/workflows/vercel-rollback.yml@v1.0.0
+    with:
+      # ⬇️ OBRIGATÓRIO: Nome do seu projeto no Vercel
+      vercelProject: "checkout-sistema-prod"
+      
+      # ⬇️ ROTAS CRÍTICAS PARA SISTEMA DE CHECKOUT
+      routes: "/,/carrinho,/checkout,/pagamento,/api/cart,/api/payment,/api/shipping,/api/cep,/api/health"
+      
+      # ⬇️ CONFIGURAÇÕES PARA ALTA DISPONIBILIDADE
+      healthCheckTimeout: 50        # Timeout médio-alto para checkout
+      maxRetries: 4                 # Bom número de tentativas
+      enablePostDeployMonitoring: true
+      monitoringDurationMinutes: 45 # Monitoramento robusto
+      monitoringIntervalMinutes: 4  # Verificações regulares
+      
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+
+# ========================================
+# ROTAS IMPORTANTES PARA SISTEMA DE CHECKOUT
+# ========================================
+#
+# Páginas Críticas:
+# / - Landing page do checkout
+# /carrinho - Carrinho de compras
+# /checkout - Processo de finalização (CRÍTICO)
+# /pagamento - Processamento de pagamento (CRÍTICO)
+# /confirmacao - Confirmação de pedido
+# /rastreamento - Acompanhamento do pedido
+#
+# APIs Críticas:
+# /api/cart - Operações do carrinho (CRÍTICO)
+# /api/payment - Processamento de pagamentos (CRÍTICO)
+# /api/shipping - Cálculo de frete (CRÍTICO)
+# /api/cep - Busca de endereço
+# /api/cupom - Sistema de cupons
+# /api/health - Health check
+#
+# APIs de Integração:
+# /api/webhook/payment - Webhooks de pagamento
+# /api/webhook/shipping - Webhooks de entrega
+#
+# ========================================
+# CONFIGURAÇÕES ESPECÍFICAS
+# ========================================
+#
+# BALANCEADO para sistemas de checkout:
+# - Timeout médio-alto (50s) para operações de checkout
+# - Tentativas suficientes (4) para lidar com integrações
+# - Monitoramento robusto (45min) para detectar problemas
+# - Verificações regulares (4min) para boa cobertura
+#
+# FOCO: Garantir que o processo de checkout nunca falhe
+# sem detecção, pois impacta diretamente na receita.
+#
+# ========================================

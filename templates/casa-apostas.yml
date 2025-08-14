@@ -1,0 +1,65 @@
+# 🎰 Template Casa de Apostas - Deploy com Rollback Automático
+# 
+# Otimizado para plataformas de apostas e jogos
+# Configurações robustas para sistemas críticos
+
+name: Deploy Casa de Apostas
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: SeuUsuario/vercel-rollback-workflows/.github/workflows/vercel-rollback.yml@v1.0.0
+    with:
+      # ⬇️ OBRIGATÓRIO: Nome do seu projeto no Vercel
+      vercelProject: "casa-apostas-producao"
+      
+      # ⬇️ ROTAS CRÍTICAS PARA CASA DE APOSTAS
+      routes: "/,/login,/apostas,/carteira,/jogos,/odds,/api/odds,/api/apostas,/api/carteira,/api/health"
+      
+      # ⬇️ CONFIGURAÇÕES ROBUSTAS PARA SISTEMA CRÍTICO
+      healthCheckTimeout: 60        # Timeout maior para APIs complexas
+      maxRetries: 5                 # Mais tentativas para sistema crítico
+      enablePostDeployMonitoring: true
+      monitoringDurationMinutes: 60 # Monitoramento estendido (1 hora)
+      monitoringIntervalMinutes: 3  # Verificações mais frequentes
+      
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+
+# ========================================
+# ROTAS IMPORTANTES PARA CASA DE APOSTAS
+# ========================================
+#
+# Páginas Críticas:
+# / - Landing page
+# /login - Autenticação de usuários
+# /apostas - Interface de apostas
+# /carteira - Gestão financeira
+# /jogos - Catálogo de jogos
+# /odds - Cotações em tempo real
+# /historico - Histórico de apostas
+#
+# APIs Críticas:
+# /api/odds - Cotações (MUITO CRÍTICO)
+# /api/apostas - Processamento de apostas
+# /api/carteira - Transações financeiras
+# /api/auth - Autenticação
+# /api/health - Health check
+# /api/payments - Sistema de pagamentos
+#
+# ========================================
+# CONFIGURAÇÕES ESPECÍFICAS
+# ========================================
+#
+# - Timeout alto (60s) devido à complexidade das APIs
+# - Muitas tentativas (5) para garantir disponibilidade
+# - Monitoramento longo (60min) para detectar problemas
+# - Verificações frequentes (3min) para resposta rápida
+#
+# ========================================
