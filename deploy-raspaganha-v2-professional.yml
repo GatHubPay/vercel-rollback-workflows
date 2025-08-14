@@ -1,0 +1,263 @@
+# 🚀 Deploy RaspaGanha V2 - Health Check Profissional (Big Companies Style)
+
+name: Deploy RaspaGanha V2 Professional
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  # Job 1: Deploy para produção
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        
+      - name: 🚀 Deploy to Vercel (PRODUÇÃO)
+        uses: amondnet/vercel-action@v25
+        id: vercel-deploy
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_TEAM_ID }}
+          vercel-project-id: rasparei
+          vercel-args: '--prod'
+          
+      - name: ⏳ Aguardar Deploy de Produção
+        run: |
+          echo "⏳ Aguardando deploy de PRODUÇÃO ficar disponível..."
+          echo "🌐 Deploy será promovido automaticamente para https://rasparei.com/"
+          sleep 45
+          
+      - name: 📱 Notificar Deploy de Produção
+        run: |
+          MESSAGE="🚀 Deploy PRODUÇÃO iniciado%0A%0A🌐 Site: https://rasparei.com/%0A📊 Commit: ${GITHUB_SHA:0:7}%0A👤 Por: ${{ github.actor }}%0A🔄 Aguardando health check..."
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE"
+
+  # Job 2: Health Check Profissional (igual às Big Companies)
+  health-check:
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+    outputs:
+      health_passed: ${{ steps.health.outputs.health_passed }}
+      status_code: ${{ steps.health.outputs.status_code }}
+      response_time: ${{ steps.health.outputs.response_time }}
+      errors_count: ${{ steps.health.outputs.errors_count }}
+      error_details: ${{ steps.health.outputs.error_details }}
+    
+    steps:
+      - name: 🔍 Health Check Profissional
+        id: health
+        run: |
+          echo "🔍 Health Check - Estilo Big Companies"
+          echo "======================================"
+          
+          ERRORS=0
+          
+          # 1. AVAILABILITY CHECK - O mais importante
+          echo "📊 1. Testando disponibilidade..."
+          
+          RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};TIME:%{time_total}" --max-time 10 "https://rasparei.com/" || echo "HTTPSTATUS:000;TIME:999")
+          STATUS=$(echo $RESPONSE | grep -o "HTTPSTATUS:[0-9]*" | cut -d: -f2)
+          TIME=$(echo $RESPONSE | grep -o "TIME:[0-9.]*" | cut -d: -f2)
+          
+          echo "   Status: $STATUS"
+          echo "   Tempo: ${TIME}s"
+          
+          # 2. CRITICAL ERRORS ONLY - Só erros que realmente importam
+          if [[ "$STATUS" != "200" ]]; then
+            echo "❌ FALHA CRÍTICA: Site não responde (HTTP $STATUS)"
+            ERRORS=$((ERRORS + 1))
+          elif (( $(echo "$TIME > 5.0" | bc -l 2>/dev/null || echo "0") )); then
+            echo "❌ FALHA CRÍTICA: Site muito lento (${TIME}s > 5s)"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✅ Site disponível e responsivo"
+          fi
+          
+          # 3. BASIC CONTENT CHECK - Só verificar se não é página de erro
+          echo "📄 2. Verificando conteúdo básico..."
+          
+          CONTENT=$(curl -s --max-time 10 "https://rasparei.com/" || echo "")
+          CONTENT_SIZE=${#CONTENT}
+          
+          echo "   Tamanho: $CONTENT_SIZE chars"
+          
+          if [[ $CONTENT_SIZE -lt 1000 ]]; then
+            echo "❌ FALHA CRÍTICA: Conteúdo muito pequeno - possível erro"
+            ERRORS=$((ERRORS + 1))
+          elif echo "$CONTENT" | grep -qi "500\|internal server error\|application error\|fatal error\|error occurred\|something went wrong\|bailout_to_client_side_rendering"; then
+            echo "❌ FALHA CRÍTICA: Página de erro detectada"
+            
+            # Mostrar qual erro foi detectado para debug
+            if echo "$CONTENT" | grep -qi "bailout_to_client_side_rendering"; then
+              echo "   🔍 Erro específico: BAILOUT_TO_CLIENT_SIDE_RENDERING (Next.js hydration)"
+            elif echo "$CONTENT" | grep -qi "500"; then
+              echo "   🔍 Erro específico: HTTP 500 (Internal Server Error)"
+            elif echo "$CONTENT" | grep -qi "application error"; then
+              echo "   🔍 Erro específico: Application Error"
+            else
+              echo "   🔍 Erro específico: Erro genérico detectado no conteúdo"
+            fi
+            
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✅ Conteúdo carregado normalmente"
+          fi
+          
+          # 4. FINAL RESULT - Só falha se realmente crítico
+          echo ""
+          echo "📊 RESULTADO FINAL:"
+          echo "❌ Falhas críticas: $ERRORS"
+          
+          # Coletar detalhes do erro
+          ERROR_DETAILS=""
+          if [[ "$ERRORS" -gt 0 ]]; then
+            if [[ "$STATUS" != "200" ]]; then
+              ERROR_DETAILS="Site não responde (HTTP $STATUS)"
+            elif (( $(echo "$TIME > 5.0" | bc -l 2>/dev/null || echo "0") )); then
+              ERROR_DETAILS="Site muito lento (${TIME}s)"
+            elif echo "$CONTENT" | grep -qi "bailout_to_client_side_rendering"; then
+              ERROR_DETAILS="Erro de hidratação Next.js"
+            elif echo "$CONTENT" | grep -qi "500"; then
+              ERROR_DETAILS="Erro interno do servidor"
+            elif echo "$CONTENT" | grep -qi "application error"; then
+              ERROR_DETAILS="Erro da aplicação"
+            else
+              ERROR_DETAILS="Conteúdo muito pequeno ou erro genérico"
+            fi
+          fi
+          
+          # Salvar informações
+          echo "errors_count=$ERRORS" >> $GITHUB_OUTPUT
+          echo "status_code=$STATUS" >> $GITHUB_OUTPUT
+          echo "response_time=$TIME" >> $GITHUB_OUTPUT
+          echo "error_details=$ERROR_DETAILS" >> $GITHUB_OUTPUT
+          
+          if [[ "$ERRORS" -gt 0 ]]; then
+            echo ""
+            echo "🚨 HEALTH CHECK FALHOU - PROBLEMA CRÍTICO DETECTADO"
+            echo "health_passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo ""
+            echo "✅ HEALTH CHECK PASSOU - SITE FUNCIONANDO"
+            echo "health_passed=true" >> $GITHUB_OUTPUT
+          fi
+
+  # Job 3: Rollback Automático
+  rollback:
+    runs-on: ubuntu-latest
+    needs: [deploy, health-check]
+    if: always() && needs.health-check.result == 'failure'
+    outputs:
+      rollback_executed: ${{ steps.rollback.outputs.executed }}
+    
+    steps:
+      - name: 🔍 Debug Rollback
+        run: |
+          echo "🔍 DEBUG ROLLBACK:"
+          echo "Health check result: ${{ needs.health-check.result }}"
+          echo "Health check passed: ${{ needs.health-check.outputs.health_passed }}"
+          echo "Event name: ${{ github.event_name }}"
+          
+      - name: 🔄 Rollback Automático
+        id: rollback
+        run: |
+          echo "🚨 EXECUTANDO ROLLBACK AUTOMÁTICO..."
+          echo "Deploy automático falhou - revertendo"
+          
+          npm install -g vercel@latest
+          
+          echo "🔍 Buscando deployment anterior..."
+          echo "📋 Listando últimos 10 deployments..."
+          DEPLOYMENTS=$(npx vercel ls rasparei --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" -m 10)
+          echo "$DEPLOYMENTS"
+          
+          # Buscar APENAS deployments Ready para rollback
+          echo "🔍 Procurando deployments Ready para rollback..."
+          READY_DEPLOYMENTS=$(echo "$DEPLOYMENTS" | grep "● Ready" | grep "Production" || true)
+          echo "📋 Deployments Ready encontrados:"
+          echo "$READY_DEPLOYMENTS"
+          
+          # Contar quantos deployments Ready temos
+          READY_COUNT=$(echo "$READY_DEPLOYMENTS" | grep -c "https://" || echo "0")
+          echo "📊 Total de deployments Ready: $READY_COUNT"
+          
+          if [ "$READY_COUNT" -ge 2 ]; then
+            # Pegar o segundo deployment Ready (o primeiro é o atual que falhou)
+            PREVIOUS_URL=$(echo "$READY_DEPLOYMENTS" | sed -n '2p' | awk '{print $1}')
+            echo "🔄 Executando rollback para o deployment anterior: $PREVIOUS_URL"
+          elif [ "$READY_COUNT" -eq 1 ]; then
+            # Se só tem 1, usar ele mesmo (melhor que nada)
+            PREVIOUS_URL=$(echo "$READY_DEPLOYMENTS" | head -1 | awk '{print $1}')
+            echo "🔄 Só há 1 deployment Ready, usando ele: $PREVIOUS_URL"
+          else
+            echo "❌ Nenhum deployment Ready encontrado"
+            echo "executed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Executar o rollback
+          if [ -n "$PREVIOUS_URL" ]; then
+            npx vercel promote "$PREVIOUS_URL" --token="${{ secrets.VERCEL_TOKEN }}" --scope="${{ secrets.VERCEL_SCOPE }}" --yes
+            
+            if [ $? -eq 0 ]; then
+              echo "✅ ROLLBACK EXECUTADO!"
+              echo "🧪 Aguardando 30s para estabilizar..."
+              sleep 30
+              
+              # Verificar se funcionou
+              ROLLBACK_STATUS=$(curl -s -w "%{http_code}" -o /dev/null --max-time 30 "https://rasparei.com/" || echo "000")
+              
+              if [[ "$ROLLBACK_STATUS" == "200" ]]; then
+                echo "✅ ROLLBACK VERIFICADO - SITE FUNCIONANDO!"
+                echo "executed=true" >> $GITHUB_OUTPUT
+              else
+                echo "❌ ROLLBACK FALHOU (Status: $ROLLBACK_STATUS)"
+                echo "executed=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "❌ Comando de rollback falhou"
+              echo "executed=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+  # Job 4: Notificações
+  notify:
+    runs-on: ubuntu-latest
+    needs: [health-check, rollback]
+    if: always()
+    
+    steps:
+      - name: 📱 Telegram Notification
+        run: |
+          HEALTH_PASSED="${{ needs.health-check.outputs.health_passed }}"
+          STATUS_CODE="${{ needs.health-check.outputs.status_code }}"
+          RESPONSE_TIME="${{ needs.health-check.outputs.response_time }}"
+          ERRORS="${{ needs.health-check.outputs.errors_count }}"
+          ERROR_DETAILS="${{ needs.health-check.outputs.error_details }}"
+          ROLLBACK="${{ needs.rollback.outputs.rollback_executed || 'não executado' }}"
+          ROLLBACK_JOB_STATUS="${{ needs.rollback.result || 'não executado' }}"
+          
+          if [[ "$HEALTH_PASSED" == "true" ]]; then
+            # Sucesso
+            MESSAGE="✅ RaspaGanha V2 - FUNCIONANDO!%0A%0A🌐 Site: https://rasparei.com/%0A📊 Status: $STATUS_CODE%0A⚡ Tempo: ${RESPONSE_TIME}s%0A📊 Commit: ${GITHUB_SHA:0:7}%0A%0A🎯 Deploy estilo Big Companies!"
+          else
+            # Falha
+            if [[ "$ROLLBACK" == "true" ]]; then
+              MESSAGE="🔄 ROLLBACK EXECUTADO!%0A%0A🚨 Deploy falhou ($ERRORS erros críticos)%0A✅ Site revertido automaticamente%0A🌐 https://rasparei.com/%0A📊 Status: $STATUS_CODE%0A📊 Commit: ${GITHUB_SHA:0:7}%0A%0A✅ USUÁRIOS PROTEGIDOS!"
+            else
+              MESSAGE="🚨 DEPLOY FALHOU!%0A%0A❌ Falhas críticas: $ERRORS%0A🔍 Erro: $ERROR_DETAILS%0A📊 Status: $STATUS_CODE%0A⚡ Tempo: ${RESPONSE_TIME}s%0A🔄 Rollback: $ROLLBACK_JOB_STATUS%0A🌐 https://rasparei.com/%0A📊 Commit: ${GITHUB_SHA:0:7}%0A%0A🔥 INTERVENÇÃO NECESSÁRIA!"
+            fi
+          fi
+          
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE"
