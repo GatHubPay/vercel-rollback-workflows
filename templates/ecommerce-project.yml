@@ -1,0 +1,50 @@
+# 🛒 Template E-commerce - Deploy com Rollback Automático
+# 
+# Otimizado para lojas online e e-commerce
+# Testa rotas críticas como carrinho, checkout e produtos
+
+name: Deploy E-commerce com Rollback
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: SeuUsuario/vercel-rollback-workflows/.github/workflows/vercel-rollback.yml@v1
+    with:
+      # ⬇️ OBRIGATÓRIO: Nome do seu projeto no Vercel
+      vercelProject: "minha-loja-vercel"
+      
+      # ⬇️ ROTAS CRÍTICAS PARA E-COMMERCE
+      routes: "/,/produtos,/carrinho,/checkout,/api/produtos,/api/pagamento"
+      
+      # ⬇️ CONFIGURAÇÕES OTIMIZADAS PARA E-COMMERCE
+      healthCheckTimeout: 45        # Timeout maior para APIs de pagamento
+      maxRetries: 4                 # Mais tentativas para transações
+      monitoringDurationMinutes: 45 # Monitoramento estendido
+      
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+
+# ========================================
+# ROTAS IMPORTANTES PARA E-COMMERCE
+# ========================================
+#
+# Páginas Principais:
+# / - Homepage
+# /produtos - Catálogo
+# /carrinho - Carrinho de compras  
+# /checkout - Finalização
+# /conta - Área do cliente
+#
+# APIs Críticas:
+# /api/produtos - Listagem de produtos
+# /api/carrinho - Operações do carrinho
+# /api/pagamento - Processamento de pagamento
+# /api/auth - Autenticação
+#
+# ========================================

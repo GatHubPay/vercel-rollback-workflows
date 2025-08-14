@@ -8,10 +8,35 @@ on:
         required: true
         type: string
       routes:
-        description: "Rotas para health check, separadas por vírgula (ex: '/,/login,/checkout')"
+        description: "Rotas para health check, separadas por vírgula (ex: '/,/login,/checkout'). Deixe vazio para auto-detecção"
         required: false
         type: string
-        default: "/"
+        default: ""
+      healthCheckTimeout:
+        description: "Timeout em segundos para cada health check (padrão: 30)"
+        required: false
+        type: number
+        default: 30
+      maxRetries:
+        description: "Máximo de tentativas para health check (padrão: 3)"
+        required: false
+        type: number
+        default: 3
+      enablePostDeployMonitoring:
+        description: "Habilitar monitoramento pós-deploy (padrão: true)"
+        required: false
+        type: boolean
+        default: true
+      monitoringDurationMinutes:
+        description: "Duração do monitoramento pós-deploy em minutos (padrão: 30)"
+        required: false
+        type: number
+        default: 30
+      monitoringIntervalMinutes:
+        description: "Intervalo entre verificações em minutos (padrão: 5)"
+        required: false
+        type: number
+        default: 5
     secrets:
       VERCEL_TOKEN:
         required: true
@@ -19,89 +44,401 @@ on:
         required: true
       VERCEL_SCOPE:
         required: true
+    outputs:
+      deployUrl:
+        description: "URL do deployment realizado"
+        value: ${{ jobs.deploy-and-guard.outputs.deploy_url }}
+      rollbackExecuted:
+        description: "Se rollback foi executado"
+        value: ${{ jobs.deploy-and-guard.outputs.rollback_executed }}
 
 jobs:
   deploy-and-guard:
     runs-on: ubuntu-latest
+    outputs:
+      deploy_url: ${{ steps.discover.outputs.deploy_url }}
+      rollback_executed: ${{ steps.rollback.outputs.executed || 'false' }}
     steps:
       - name: Checkout (repo que chamou)
         uses: actions/checkout@v4
 
       - name: Instalar ferramentas
         run: |
-          npm i -g vercel
+          npm install -g vercel@latest
           sudo apt-get update
-          sudo apt-get install -y jq
+          sudo apt-get install -y jq curl bc
+          
+      - name: Validar inputs
+        run: |
+          if [ -z "${{ inputs.vercelProject }}" ]; then
+            echo "❌ Nome do projeto Vercel é obrigatório"
+            exit 1
+          fi
+          echo "✅ Projeto: ${{ inputs.vercelProject }}"
+          echo "✅ Rotas configuradas: ${{ inputs.routes }}"
+          echo "✅ Timeout: ${{ inputs.healthCheckTimeout }}s"
+          echo "✅ Max retries: ${{ inputs.maxRetries }}"
 
       - name: Deploy para Vercel (produção)
+        id: deploy
         run: |
-          npx vercel --prod --confirm \
+          echo "🚀 Iniciando deploy para produção..."
+          
+          # Deploy com captura de output
+          DEPLOY_OUTPUT=$(npx vercel --prod --confirm \
             --token="${{ secrets.VERCEL_TOKEN }}" \
-            --scope="${{ secrets.VERCEL_SCOPE }}"
+            --scope="${{ secrets.VERCEL_SCOPE }}" 2>&1)
+          
+          if [ $? -ne 0 ]; then
+            echo "❌ Falha no deploy:"
+            echo "$DEPLOY_OUTPUT"
+            exit 1
+          fi
+          
+          echo "✅ Deploy realizado com sucesso"
+          echo "$DEPLOY_OUTPUT"
 
       - name: Descobrir URL do último deploy em produção
         id: discover
         run: |
-          # pega o ID do projeto (a partir do nome)
-          PROJECT_INFO=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+          echo "🔍 Buscando informações do projeto..."
+          
+          # Pega o ID do projeto
+          PROJECT_INFO=$(curl -s -w "HTTP_STATUS:%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
             "https://api.vercel.com/v9/projects/${{ inputs.vercelProject }}?teamId=${{ secrets.VERCEL_TEAM_ID }}")
-          PROJECT_ID=$(echo "$PROJECT_INFO" | jq -r '.id')
-
-          # pega o deployment mais recente pronto em produção
-          LATEST=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+          
+          HTTP_STATUS=$(echo "$PROJECT_INFO" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+          PROJECT_DATA=$(echo "$PROJECT_INFO" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ Erro ao buscar projeto (HTTP $HTTP_STATUS):"
+            echo "$PROJECT_DATA"
+            exit 1
+          fi
+          
+          PROJECT_ID=$(echo "$PROJECT_DATA" | jq -r '.id')
+          if [ "$PROJECT_ID" = "null" ] || [ -z "$PROJECT_ID" ]; then
+            echo "❌ Projeto '${{ inputs.vercelProject }}' não encontrado"
+            exit 1
+          fi
+          
+          echo "✅ Projeto encontrado: $PROJECT_ID"
+          
+          # Aguarda alguns segundos para o deploy ficar disponível
+          echo "⏳ Aguardando deploy ficar disponível..."
+          sleep 15
+          
+          # Pega o deployment mais recente pronto em produção
+          LATEST=$(curl -s -w "HTTP_STATUS:%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
             "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&teamId=${{ secrets.VERCEL_TEAM_ID }}&target=production&limit=1&state=READY")
-          DEPLOY_URL=$(echo "$LATEST" | jq -r '.deployments[0].url')
-          echo "deploy_url=https://$DEPLOY_URL" >> $GITHUB_OUTPUT
+          
+          HTTP_STATUS=$(echo "$LATEST" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+          DEPLOY_DATA=$(echo "$LATEST" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ Erro ao buscar deployments (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
+          
+          DEPLOY_URL=$(echo "$DEPLOY_DATA" | jq -r '.deployments[0].url')
+          if [ "$DEPLOY_URL" = "null" ] || [ -z "$DEPLOY_URL" ]; then
+            echo "❌ Nenhum deployment encontrado"
+            exit 1
+          fi
+          
+          FULL_URL="https://$DEPLOY_URL"
+          echo "✅ URL do deploy: $FULL_URL"
+          echo "deploy_url=$FULL_URL" >> $GITHUB_OUTPUT
+
+      - name: Detecção inteligente de rotas
+        id: route_detection
+        run: |
+          CONFIGURED_ROUTES="${{ inputs.routes }}"
+          DEPLOY_URL="${{ steps.discover.outputs.deploy_url }}"
+          
+          if [ -n "$CONFIGURED_ROUTES" ]; then
+            echo "✅ Usando rotas configuradas: $CONFIGURED_ROUTES"
+            echo "routes=$CONFIGURED_ROUTES" >> $GITHUB_OUTPUT
+          else
+            echo "🔍 Iniciando detecção automática de rotas..."
+            
+            # Rotas padrão sempre testadas
+            AUTO_ROUTES="/"
+            
+            # Tenta detectar rotas comuns
+            echo "🕵️ Verificando rotas comuns..."
+            
+            # Lista de rotas para testar
+            COMMON_ROUTES="/api/health /health /api/status /login /dashboard /produtos /posts /sobre /contato /carrinho /checkout"
+            
+            for route in $COMMON_ROUTES; do
+              echo "  Testando: $route"
+              if curl -s --connect-timeout 5 --max-time 10 -f "$DEPLOY_URL$route" > /dev/null 2>&1; then
+                echo "  ✅ Encontrada: $route"
+                AUTO_ROUTES="$AUTO_ROUTES,$route"
+              else
+                echo "  ❌ Não encontrada: $route"
+              fi
+            done
+            
+            # Tenta detectar APIs Next.js
+            echo "🔍 Verificando estrutura Next.js..."
+            if curl -s --connect-timeout 5 --max-time 10 -f "$DEPLOY_URL/_next/static" > /dev/null 2>&1; then
+              echo "✅ Aplicação Next.js detectada"
+              AUTO_ROUTES="$AUTO_ROUTES,/_next/static"
+            fi
+            
+            echo "✅ Rotas detectadas automaticamente: $AUTO_ROUTES"
+            echo "routes=$AUTO_ROUTES" >> $GITHUB_OUTPUT
+          fi
 
       - name: Health checks nas rotas
         id: health
         run: |
           set +e
           FAIL=0
-          ROUTES="${{ inputs.routes }}"
-          if [ -z "$ROUTES" ]; then ROUTES="/"; fi
-
+          ROUTES="${{ steps.route_detection.outputs.routes }}"
+          TIMEOUT="${{ inputs.healthCheckTimeout }}"
+          MAX_RETRIES="${{ inputs.maxRetries }}"
+          
           DEPLOY_URL="${{ steps.discover.outputs.deploy_url }}"
-          echo "Testando em: $DEPLOY_URL"
+          echo "🏥 Iniciando health checks..."
+          echo "📍 URL base: $DEPLOY_URL"
+          echo "🛣️  Rotas: $ROUTES"
+          echo "⏱️  Timeout: ${TIMEOUT}s por requisição"
+          echo "🔄 Max retries: $MAX_RETRIES"
+          
+          # Função para testar uma URL com retry
+          test_url() {
+            local url="$1"
+            local attempt=1
+            
+            while [ $attempt -le $MAX_RETRIES ]; do
+              echo "   Tentativa $attempt/$MAX_RETRIES para $url"
+              
+              # Testa conectividade básica primeiro
+              if ! curl -s --connect-timeout 5 --max-time $TIMEOUT -f "$url" > /dev/null 2>&1; then
+                echo "   ❌ Falha na conectividade (tentativa $attempt)"
+                if [ $attempt -eq $MAX_RETRIES ]; then
+                  return 1
+                fi
+                sleep $((attempt * 2)) # Backoff exponencial
+                attempt=$((attempt + 1))
+                continue
+              fi
+              
+              # Pega o status code
+              CODE=$(curl -s --connect-timeout 5 --max-time $TIMEOUT -o /dev/null -w "%{http_code}" "$url")
+              
+              # Considera sucesso 200-399
+              if [ "$CODE" -ge 200 ] && [ "$CODE" -lt 400 ]; then
+                echo "   ✅ $url -> $CODE (OK)"
+                return 0
+              else
+                echo "   ❌ $url -> $CODE (ERRO)"
+                if [ $attempt -eq $MAX_RETRIES ]; then
+                  return 1
+                fi
+                sleep $((attempt * 2))
+                attempt=$((attempt + 1))
+              fi
+            done
+            
+            return 1
+          }
+          
+          # Testa cada rota
           IFS=',' read -ra ARR <<< "$ROUTES"
           for path in "${ARR[@]}"; do
-            # garante que a rota começa com /
+            # Remove espaços em branco
+            path=$(echo "$path" | xargs)
+            
+            # Garante que a rota começa com /
             if [[ "$path" != /* ]]; then path="/$path"; fi
+            
             url="${DEPLOY_URL}${path}"
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$url")
-            echo "$url -> $CODE"
-            # considera sucesso 200-399
-            if [ "$CODE" -lt 200 ] || [ "$CODE" -ge 400 ]; then
+            echo "🧪 Testando rota: $path"
+            
+            if ! test_url "$url"; then
+              echo "❌ Falha no health check para $path"
               FAIL=1
             fi
           done
-
+          
+          # Resultado final
           if [ $FAIL -eq 1 ]; then
+            echo "❌ Health check FALHOU"
             echo "failed=true" >> $GITHUB_OUTPUT
           else
+            echo "✅ Health check PASSOU"
             echo "failed=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Enviar notificação de sucesso
+        if: steps.health.outputs.failed == 'false'
+        run: |
+          # Credenciais do Telegram (configuradas)
+          BOT_TOKEN="8045408592:AAHtPkn2DTPTrL3rs5lLFbV4vhPDEMAqodw"
+          CHAT_ID="5649252463"
+          
+          DEPLOY_URL="${{ steps.discover.outputs.deploy_url }}"
+          PROJECT_NAME="${{ inputs.vercelProject }}"
+          
+          MESSAGE="✅ *Deploy Bem-Sucedido!*
+
+🏗️ *Projeto:* $PROJECT_NAME
+📊 *Status:* SUCESSO
+🔄 *Rollback:* NÃO EXECUTADO
+🌐 *URL:* $DEPLOY_URL
+📁 *Repo:* ${{ github.repository }}
+📝 *Commit:* ${{ github.sha }}
+⏰ *Data:* $(date)"
+          
+          echo "📨 Enviando notificação de sucesso para Telegram..."
+          
+          curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+            -d "chat_id=$CHAT_ID" \
+            -d "text=$MESSAGE" \
+            -d "parse_mode=Markdown" || echo "⚠️ Falha ao enviar notificação"
+
       - name: Instant Rollback (se falhar)
+        id: rollback
         if: steps.health.outputs.failed == 'true'
         run: |
-          echo "Falhou health check. Iniciando rollback..."
-          PROJECT_INFO=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+          echo "🚨 Health check FALHOU - Iniciando rollback automático..."
+          
+          # Busca informações do projeto
+          PROJECT_INFO=$(curl -s -w "HTTP_STATUS:%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
             "https://api.vercel.com/v9/projects/${{ inputs.vercelProject }}?teamId=${{ secrets.VERCEL_TEAM_ID }}")
-          PROJECT_ID=$(echo "$PROJECT_INFO" | jq -r '.id')
-
-          # pega o deployment atual + o anterior (limit=2) e escolhe o anterior
-          HIST=$(curl -s -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
-            "https://api.vercel.com/v6/deployments?teamId=${{ secrets.VERCEL_TEAM_ID }}&projectId=$PROJECT_ID&limit=2&state=READY&target=production")
-          PREV_UID=$(echo "$HIST" | jq -r '.deployments[1].uid')
-
-          if [ "$PREV_UID" = "null" ] || [ -z "$PREV_UID" ]; then
-            echo "Não há deployment anterior elegível para rollback."
+          
+          HTTP_STATUS=$(echo "$PROJECT_INFO" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+          PROJECT_DATA=$(echo "$PROJECT_INFO" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ Erro ao buscar projeto para rollback (HTTP $HTTP_STATUS)"
+            echo "executed=false" >> $GITHUB_OUTPUT
             exit 1
           fi
-
-          curl -s -X POST "https://api.vercel.com/v9/projects/$PROJECT_ID/rollback/$PREV_UID?teamId=${{ secrets.VERCEL_TEAM_ID }}" \
+          
+          PROJECT_ID=$(echo "$PROJECT_DATA" | jq -r '.id')
+          
+          # Busca histórico de deployments
+          echo "🔍 Buscando deployment anterior para rollback..."
+          HIST=$(curl -s -w "HTTP_STATUS:%{http_code}" \
             -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
-            -H "Content-Type: application/json"
+            "https://api.vercel.com/v6/deployments?teamId=${{ secrets.VERCEL_TEAM_ID }}&projectId=$PROJECT_ID&limit=5&state=READY&target=production")
+          
+          HTTP_STATUS=$(echo "$HIST" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+          HIST_DATA=$(echo "$HIST" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ Erro ao buscar histórico de deployments"
+            echo "executed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Pega o deployment anterior (índice 1, pois 0 é o atual que falhou)
+          PREV_UID=$(echo "$HIST_DATA" | jq -r '.deployments[1].uid')
+          PREV_URL=$(echo "$HIST_DATA" | jq -r '.deployments[1].url')
+          PREV_CREATED=$(echo "$HIST_DATA" | jq -r '.deployments[1].createdAt')
+          
+          if [ "$PREV_UID" = "null" ] || [ -z "$PREV_UID" ]; then
+            echo "❌ Não há deployment anterior válido para rollback"
+            echo "Deployments disponíveis:"
+            echo "$HIST_DATA" | jq -r '.deployments[] | "- \(.uid) (\(.createdAt))"'
+            echo "executed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "✅ Deployment anterior encontrado:"
+          echo "   UID: $PREV_UID"
+          echo "   URL: https://$PREV_URL"
+          echo "   Criado: $PREV_CREATED"
+          
+          # Executa o rollback
+          echo "🔄 Executando rollback..."
+          ROLLBACK_RESULT=$(curl -s -w "HTTP_STATUS:%{http_code}" \
+            -X POST "https://api.vercel.com/v9/projects/$PROJECT_ID/rollback/$PREV_UID?teamId=${{ secrets.VERCEL_TEAM_ID }}" \
+            -H "Authorization: Bearer ${{ secrets.VERCEL_TOKEN }}" \
+            -H "Content-Type: application/json")
+          
+          HTTP_STATUS=$(echo "$ROLLBACK_RESULT" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+          ROLLBACK_DATA=$(echo "$ROLLBACK_RESULT" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ Erro ao executar rollback (HTTP $HTTP_STATUS):"
+            echo "$ROLLBACK_DATA"
+            echo "executed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "✅ Rollback executado com sucesso!"
+          echo "executed=true" >> $GITHUB_OUTPUT
+          
+          # Aguarda um pouco para o rollback ser aplicado
+          echo "⏳ Aguardando rollback ser aplicado..."
+          sleep 20
+          
+          # Testa se o rollback funcionou
+          echo "🧪 Verificando se rollback foi bem-sucedido..."
+          ROLLBACK_URL="https://$PREV_URL"
+          
+          if curl -s --connect-timeout 10 --max-time 30 -f "$ROLLBACK_URL" > /dev/null 2>&1; then
+            echo "✅ Rollback verificado - aplicação está respondendo"
+          else
+            echo "⚠️ Aviso: Não foi possível verificar o rollback imediatamente"
+          fi
 
-          echo "Rollback solicitado para deployment $PREV_UID."
+      - name: Enviar notificação de rollback
+        if: steps.rollback.outputs.executed == 'true'
+        run: |
+          # Credenciais do Telegram (configuradas)
+          BOT_TOKEN="8045408592:AAHtPkn2DTPTrL3rs5lLFbV4vhPDEMAqodw"
+          CHAT_ID="5649252463"
+          
+          DEPLOY_URL="${{ steps.discover.outputs.deploy_url }}"
+          PROJECT_NAME="${{ inputs.vercelProject }}"
+          
+          MESSAGE="🚨 *Rollback Executado!*
+
+🏗️ *Projeto:* $PROJECT_NAME
+📊 *Status:* FALHOU
+🔄 *Rollback:* EXECUTADO COM SUCESSO
+🌐 *URL Original:* $DEPLOY_URL
+📁 *Repo:* ${{ github.repository }}
+📝 *Commit:* ${{ github.sha }}
+⚠️ *Motivo:* Health check falhou
+⏰ *Data:* $(date)
+
+A aplicação foi automaticamente revertida para a versão anterior estável."
+          
+          echo "📨 Enviando notificação de rollback para Telegram..."
+          
+          curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+            -d "chat_id=$CHAT_ID" \
+            -d "text=$MESSAGE" \
+            -d "parse_mode=Markdown" || echo "⚠️ Falha ao enviar notificação"
+
+      - name: Resumo final
+        if: always()
+        run: |
+          echo "📊 RESUMO DO DEPLOY"
+          echo "===================="
+          echo "🏗️ Projeto: ${{ inputs.vercelProject }}"
+          echo "🌐 URL: ${{ steps.discover.outputs.deploy_url }}"
+          echo "🏥 Health Check: ${{ steps.health.outputs.failed == 'true' && '❌ FALHOU' || '✅ PASSOU' }}"
+          echo "🔄 Rollback: ${{ steps.rollback.outputs.executed == 'true' && '✅ EXECUTADO' || '❌ NÃO EXECUTADO' }}"
+          echo "📝 Commit: ${{ github.sha }}"
+          echo "🔗 Repositório: ${{ github.repository }}"
+          echo "===================="
+          
+          if [ "${{ steps.health.outputs.failed }}" = "true" ]; then
+            echo "⚠️ ATENÇÃO: Deploy falhou e rollback foi executado!"
+            echo "   Verifique os logs acima para detalhes do erro."
+            exit 1
+          else
+            echo "🎉 Deploy realizado com sucesso!"
+          fi

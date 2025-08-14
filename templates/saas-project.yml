@@ -1,0 +1,52 @@
+# 💼 Template SaaS - Deploy com Rollback Automático
+# 
+# Otimizado para aplicações SaaS, dashboards e sistemas
+# Testa autenticação, dashboard e APIs críticas
+
+name: Deploy SaaS com Rollback
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: SeuUsuario/vercel-rollback-workflows/.github/workflows/vercel-rollback.yml@v1
+    with:
+      # ⬇️ OBRIGATÓRIO: Nome do seu projeto no Vercel
+      vercelProject: "meu-saas-vercel"
+      
+      # ⬇️ ROTAS CRÍTICAS PARA SAAS
+      routes: "/,/login,/dashboard,/settings,/api/auth,/api/users,/api/health"
+      
+      # ⬇️ CONFIGURAÇÕES OTIMIZADAS PARA SAAS
+      healthCheckTimeout: 60        # Timeout maior para operações complexas
+      maxRetries: 5                 # Mais tentativas para sistemas críticos
+      monitoringDurationMinutes: 60 # Monitoramento estendido
+      
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+
+# ========================================
+# ROTAS IMPORTANTES PARA SAAS
+# ========================================
+#
+# Páginas Principais:
+# / - Landing page
+# /login - Autenticação
+# /dashboard - Dashboard principal
+# /settings - Configurações
+# /billing - Faturamento
+# /reports - Relatórios
+#
+# APIs Críticas:
+# /api/auth - Autenticação
+# /api/users - Gerenciamento de usuários
+# /api/data - Dados da aplicação
+# /api/billing - Sistema de cobrança
+# /api/health - Health check
+#
+# ========================================
