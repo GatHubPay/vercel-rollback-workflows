@@ -121,19 +121,213 @@ jobs:
             echo "✅ ${{ matrix.site.name }} funcionando normalmente"
           fi
 
+  # 🚀 MONITORAMENTO DE TRÁFEGO VERCEL - Detecta Picos de Acesso
+  monitor-vercel-traffic:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 🔍 Detectar TODOS os Projetos Vercel Automaticamente
+        id: traffic-check
+        run: |
+          echo "🚀 Detectando TODOS os projetos Vercel automaticamente..."
+          
+          # Configurações da Vercel (adicione esses secrets no GitHub)
+          VERCEL_TOKEN="${{ secrets.VERCEL_TOKEN }}"
+          VERCEL_TEAM_ID="${{ secrets.VERCEL_TEAM_ID }}"
+          
+          if [[ -z "$VERCEL_TOKEN" ]]; then
+            echo "⚠️ VERCEL_TOKEN não configurado - usando lista estática"
+            # Fallback para lista estática se não tiver token
+            PROJECTS=(
+              "rasparei|https://rasparei.com/|10"
+              "admin-raspaganha|https://admin.raspaganha.sa.com/|15"
+              "raspaganha-v2|https://raspaganha-v2.vercel.app/|10"
+            )
+          else
+            echo "🔑 Usando API da Vercel para detectar projetos automaticamente..."
+            
+            # Buscar todos os projetos da equipe
+            if [[ -n "$VERCEL_TEAM_ID" ]]; then
+              PROJECTS_JSON=$(curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
+                "https://api.vercel.com/v1/teams/$VERCEL_TEAM_ID/projects" || echo "[]")
+            else
+              PROJECTS_JSON=$(curl -s -H "Authorization: Bearer $VERCEL_TOKEN" \
+                "https://api.vercel.com/v1/projects" || echo "[]")
+            fi
+            
+            # Extrair domínios de todos os projetos
+            PROJECTS=()
+            echo "$PROJECTS_JSON" | jq -r '.projects[]? | select(.domains != null) | .domains[]? | select(.verified == true) | .name' 2>/dev/null | while read -r domain; do
+              if [[ -n "$domain" ]]; then
+                # Adicionar timeout baseado no tipo de domínio
+                if [[ "$domain" == *"admin"* ]] || [[ "$domain" == *"dashboard"* ]]; then
+                  timeout="15"
+                elif [[ "$domain" == *"canary"* ]] || [[ "$domain" == *"staging"* ]] || [[ "$domain" == *"dev"* ]]; then
+                  timeout="8"
+                else
+                  timeout="10"
+                fi
+                
+                PROJECTS+=("$domain|https://$domain/|$timeout")
+                echo "🌐 Detectado: $domain (timeout: ${timeout}s)"
+              fi
+            done
+            
+            # Se não conseguiu detectar via API, usar fallback
+            if [[ ${#PROJECTS[@]} -eq 0 ]]; then
+              echo "⚠️ Falha na API - usando lista estática"
+              PROJECTS=(
+                "rasparei|https://rasparei.com/|10"
+                "admin-raspaganha|https://admin.raspaganha.sa.com/|15"
+                "raspaganha-v2|https://raspaganha-v2.vercel.app/|10"
+              )
+            fi
+          fi
+          
+          # Contadores para análise
+          HIGH_TRAFFIC_COUNT=0
+          PROBLEM_PROJECTS=""
+          TOTAL_PROJECTS=${#PROJECTS[@]}
+          
+          echo "📊 Total de projetos detectados: $TOTAL_PROJECTS"
+          
+          # Verificar cada projeto
+          for project in "${PROJECTS[@]}"; do
+            IFS='|' read -r project_name url timeout <<< "$project"
+            
+            echo "🌐 Verificando $project_name..."
+            
+            # Health check + análise de tráfego
+            RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};TIME:%{time_total};SIZE:%{size_download}" \
+                           --max-time $timeout \
+                           "$url" || echo "HTTPSTATUS:000;TIME:999;SIZE:0")
+            
+            STATUS=$(echo $RESPONSE | grep -o "HTTPSTATUS:[0-9]*" | cut -d: -f2)
+            TIME=$(echo $RESPONSE | grep -o "TIME:[0-9.]*" | cut -d: -f2)
+            SIZE=$(echo $RESPONSE | grep -o "SIZE:[0-9]*" | cut -d: -f2)
+            
+            # Detectar problemas de tráfego
+            TRAFFIC_ISSUE=""
+            if [[ "$STATUS" == "000" ]]; then
+              TRAFFIC_ISSUE="🚨 OFFLINE - Possível sobrecarga"
+              HIGH_TRAFFIC_COUNT=$((HIGH_TRAFFIC_COUNT + 1))
+            elif [[ "$STATUS" != "200" ]]; then
+              TRAFFIC_ISSUE="⚠️ ERRO $STATUS - Possível sobrecarga"
+              HIGH_TRAFFIC_COUNT=$((HIGH_TRAFFIC_COUNT + 1))
+            elif (( $(echo "$TIME > 5.0" | bc -l 2>/dev/null || echo "0") )); then
+              TRAFFIC_ISSUE="🔥 ALTO TRÁFEGO - ${TIME}s"
+              HIGH_TRAFFIC_COUNT=$((HIGH_TRAFFIC_COUNT + 1))
+            elif (( $(echo "$TIME > 3.0" | bc -l 2>/dev/null || echo "0") )); then
+              TRAFFIC_ISSUE="⚠️ TRÁFEGO ELEVADO - ${TIME}s"
+            fi
+            
+            if [[ -n "$TRAFFIC_ISSUE" ]]; then
+              PROBLEM_PROJECTS="${PROBLEM_PROJECTS}• $project_name: $TRAFFIC_ISSUE%0A"
+            fi
+            
+            echo "   📊 Status: $STATUS | ⚡ Tempo: ${TIME}s | 📄 Tamanho: $SIZE bytes | $TRAFFIC_ISSUE"
+          done
+          
+          # Salvar resultados para uso posterior
+          echo "high_traffic_count=$HIGH_TRAFFIC_COUNT" >> $GITHUB_OUTPUT
+          echo "problem_projects=$PROBLEM_PROJECTS" >> $GITHUB_OUTPUT
+          echo "total_projects=$TOTAL_PROJECTS" >> $GITHUB_OUTPUT
+          
+          echo "📊 Resumo: $HIGH_TRAFFIC_COUNT/$TOTAL_PROJECTS com problemas de tráfego"
+      
+      - name: 🆕 Detectar Novos Domínios e Notificar
+        if: steps.traffic-check.outputs.total_projects > 0
+        run: |
+          echo "🆕 Verificando se há novos domínios..."
+          
+          # Comparar com lista anterior (se existir)
+          CURRENT_DOMAINS=$(echo "${{ steps.traffic-check.outputs.problem_projects }}" | grep -o '[^|]*' | head -1)
+          
+          # Salvar lista atual para próxima comparação
+          echo "$CURRENT_DOMAINS" > /tmp/current_domains.txt
+          
+          # Se for primeira execução, não notificar
+          if [[ ! -f /tmp/previous_domains.txt ]]; then
+            echo "📝 Primeira execução - salvando lista de domínios"
+            cp /tmp/current_domains.txt /tmp/previous_domains.txt
+            exit 0
+          fi
+          
+          # Comparar domínios atuais com anteriores
+          NEW_DOMAINS=$(comm -13 /tmp/previous_domains.txt /tmp/current_domains.txt | grep -v '^$')
+          
+          if [[ -n "$NEW_DOMAINS" ]]; then
+            echo "🆕 Novos domínios detectados:"
+            echo "$NEW_DOMAINS"
+            
+            # Notificar sobre novos domínios
+            MESSAGE="🆕 NOVOS DOMÍNIOS DETECTADOS!%0A%0A🌐 Novos projetos:%0A"
+            
+            while IFS= read -r domain; do
+              if [[ -n "$domain" ]]; then
+                MESSAGE="${MESSAGE}• $domain%0A"
+              fi
+            done <<< "$NEW_DOMAINS"
+            
+            MESSAGE="${MESSAGE}%0A📅 Data: $(TZ='America/Sao_Paulo' date '+%d/%m/%Y')%0A⏰ Hora: $(TZ='America/Sao_Paulo' date '+%H:%M:%S') (Brasília)%0A%0A✅ Monitoramento automático ativado!"
+            
+            # Enviar notificação
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+              -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+              -d "text=$MESSAGE" || echo "⚠️ Falha ao notificar novos domínios"
+            
+            echo "🆕 Notificação de novos domínios enviada!"
+          else
+            echo "✅ Nenhum novo domínio detectado"
+          fi
+          
+          # Atualizar lista anterior
+          cp /tmp/current_domains.txt /tmp/previous_domains.txt
+      
+      - name: 🚨 Alerta de Alto Tráfego Simultâneo
+        if: steps.traffic-check.outputs.high_traffic_count >= 1
+        run: |
+          echo "🚨 ALERTA: Projeto com problema de tráfego detectado!"
+          
+          MESSAGE="🚨 ALERTA DE TRÁFEGO VERCEL%0A%0A🔥 ${{ steps.traffic-check.outputs.high_traffic_count }}/${{ steps.traffic-check.outputs.total_projects }} projetos com problemas%0A%0A📊 DOMÍNIOS AFETADOS:%0A${{ steps.traffic-check.outputs.problem_projects }}%0A📅 Data: $(TZ='America/Sao_Paulo' date '+%d/%m/%Y')%0A⏰ Hora: $(TZ='America/Sao_Paulo' date '+%H:%M:%S') (Brasília)%0A%0A🚨 VERIFICAR DOMÍNIO AFETADO URGENTE!"
+          
+          # Enviar alerta crítico para Telegram
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=$MESSAGE" || echo "⚠️ Falha ao enviar alerta"
+          
+          echo "🚨 Alerta de alto tráfego enviado!"
+      
+      - name: 📊 Relatório de Tráfego
+        if: always()
+        run: |
+          echo "📊 Relatório de Tráfego Vercel"
+          echo "⏰ Verificação: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🎯 Total de projetos: ${{ steps.traffic-check.outputs.total_projects }}"
+          echo "🚨 Projetos com problemas: ${{ steps.traffic-check.outputs.high_traffic_count }}"
+          
+          if [[ "${{ steps.traffic-check.outputs.high_traffic_count }}" -ge 1 ]]; then
+            echo "🚨 ALERTA ATIVO: ${{ steps.traffic-check.outputs.high_traffic_count }} projeto(s) com problemas!"
+            echo "📊 Domínios afetados:"
+            echo "${{ steps.traffic-check.outputs.problem_projects }}"
+          else
+            echo "✅ Tráfego normal em todos os projetos"
+          fi
+
   # 📊 RESUMO GERAL (executa sempre, mesmo se sites falharem)
   summary:
     runs-on: ubuntu-latest
-    needs: monitor-sites
+    needs: [monitor-sites, monitor-vercel-traffic]
     if: always()
     
     steps:
       - name: 📊 Resumo do Monitoramento
         run: |
-          echo "📊 Monitoramento 24/7 executado"
+          echo "📊 Monitoramento 24/7 + Tráfego Vercel executado"
           echo "⏰ Horário: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # Em caso de falhas, o GitHub Actions já mostra no dashboard
           # Aqui você pode adicionar lógica para contar sucessos/falhas
           
-          echo "✅ Próxima verificação em 15 minutos"
+          echo "✅ Próxima verificação em 5 minutos"
+          echo "🚀 Monitoramento de tráfego Vercel ativo"
