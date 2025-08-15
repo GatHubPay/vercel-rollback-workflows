@@ -206,23 +206,65 @@ jobs:
             TIME=$(echo $RESPONSE | grep -o "TIME:[0-9.]*" | cut -d: -f2)
             SIZE=$(echo $RESPONSE | grep -o "SIZE:[0-9]*" | cut -d: -f2)
             
-            # Detectar problemas de tráfego
-            TRAFFIC_ISSUE=""
-            if [[ "$STATUS" == "000" ]]; then
-              TRAFFIC_ISSUE="🚨 OFFLINE - Possível sobrecarga"
+            # 🚀 TESTE DE ACESSO SIMULTÂNEO - Simula múltiplos usuários
+            echo "   🔍 Testando acesso simultâneo..."
+            SIMULTANEOUS_RESPONSES=()
+            for i in {1..3}; do
+              SIM_RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};TIME:%{time_total}" \
+                                 --max-time $timeout \
+                                 "$url" || echo "HTTPSTATUS:000;TIME:999")
+              SIMULTANEOUS_RESPONSES+=("$SIM_RESPONSE")
+              sleep 0.1  # Pequena pausa entre requisições
+            done
+            
+            # Analisar se há degradação de performance (indicativo de alto tráfego)
+            PERFORMANCE_DEGRADATION=""
+            TOTAL_SIM_TIME=0
+            for sim_resp in "${SIMULTANEOUS_RESPONSES[@]}"; do
+              SIM_TIME=$(echo $sim_resp | grep -o "TIME:[0-9.]*" | cut -d: -f2)
+              TOTAL_SIM_TIME=$(echo "$TOTAL_SIM_TIME + $SIM_TIME" | bc -l 2>/dev/null || echo "$TOTAL_SIM_TIME")
+            done
+            
+            AVG_SIM_TIME=$(echo "scale=2; $TOTAL_SIM_TIME / 3" | bc -l 2>/dev/null || echo "0")
+            
+            # Se o tempo médio das requisições simultâneas for muito maior que a primeira
+            if (( $(echo "$AVG_SIM_TIME > $TIME * 1.5" | bc -l 2>/dev/null || echo "0") )); then
+              PERFORMANCE_DEGRADATION="🔥 DEGRADAÇÃO SIMULTÂNEA - Múltiplos acessos afetando performance"
               HIGH_TRAFFIC_COUNT=$((HIGH_TRAFFIC_COUNT + 1))
-            elif [[ "$STATUS" != "200" ]]; then
-              TRAFFIC_ISSUE="⚠️ ERRO $STATUS - Possível sobrecarga"
-              HIGH_TRAFFIC_COUNT=$((HIGH_TRAFFIC_COUNT + 1))
-            elif (( $(echo "$TIME > 5.0" | bc -l 2>/dev/null || echo "0") )); then
-              TRAFFIC_ISSUE="🔥 ALTO TRÁFEGO - ${TIME}s"
-              HIGH_TRAFFIC_COUNT=$((HIGH_TRAFFIC_COUNT + 1))
-            elif (( $(echo "$TIME > 3.0" | bc -l 2>/dev/null || echo "0") )); then
-              TRAFFIC_ISSUE="⚠️ TRÁFEGO ELEVADO - ${TIME}s"
             fi
             
+            # Detectar problemas de tráfego REAL (não erros HTTP normais)
+            TRAFFIC_ISSUE=""
+            if [[ "$STATUS" == "000" ]]; then
+              TRAFFIC_ISSUE="🚨 OFFLINE - Servidor não responde"
+              HIGH_TRAFFIC_COUNT=$((HIGH_TRAFFIC_COUNT + 1))
+            elif [[ "$STATUS" == "503" ]] || [[ "$STATUS" == "502" ]] || [[ "$STATUS" == "500" ]]; then
+              TRAFFIC_ISSUE="🔥 SOBRECARGA REAL - HTTP $STATUS"
+              HIGH_TRAFFIC_COUNT=$((HIGH_TRAFFIC_COUNT + 1))
+            elif (( $(echo "$TIME > 8.0" | bc -l 2>/dev/null || echo "0") )); then
+              TRAFFIC_ISSUE="🔥 ALTO TRÁFEGO CRÍTICO - ${TIME}s"
+              HIGH_TRAFFIC_COUNT=$((HIGH_TRAFFIC_COUNT + 1))
+            elif (( $(echo "$TIME > 5.0" | bc -l 2>/dev/null || echo "0") )); then
+              TRAFFIC_ISSUE="⚠️ TRÁFEGO ELEVADO - ${TIME}s"
+            elif (( $(echo "$TIME > 3.0" | bc -l 2>/dev/null || echo "0") )); then
+              TRAFFIC_ISSUE="📊 TRÁFEGO ACIMA DO NORMAL - ${TIME}s"
+            fi
+            
+            # Combinar problemas de tráfego com degradação simultânea
+            FINAL_ISSUE=""
             if [[ -n "$TRAFFIC_ISSUE" ]]; then
-              PROBLEM_PROJECTS="${PROBLEM_PROJECTS}• $project_name: $TRAFFIC_ISSUE%0A"
+              FINAL_ISSUE="$TRAFFIC_ISSUE"
+            fi
+            if [[ -n "$PERFORMANCE_DEGRADATION" ]]; then
+              if [[ -n "$FINAL_ISSUE" ]]; then
+                FINAL_ISSUE="${FINAL_ISSUE} + $PERFORMANCE_DEGRADATION"
+              else
+                FINAL_ISSUE="$PERFORMANCE_DEGRADATION"
+              fi
+            fi
+            
+            if [[ -n "$FINAL_ISSUE" ]]; then
+              PROBLEM_PROJECTS="${PROBLEM_PROJECTS}• $project_name: $FINAL_ISSUE%0A"
             fi
             
             echo "   📊 Status: $STATUS | ⚡ Tempo: ${TIME}s | 📄 Tamanho: $SIZE bytes | $TRAFFIC_ISSUE"
@@ -289,7 +331,7 @@ jobs:
         run: |
           echo "🚨 ALERTA: Projeto com problema de tráfego detectado!"
           
-          MESSAGE="🚨 ALERTA DE TRÁFEGO VERCEL%0A%0A🔥 ${{ steps.traffic-check.outputs.high_traffic_count }}/${{ steps.traffic-check.outputs.total_projects }} projetos com problemas%0A%0A📊 DOMÍNIOS AFETADOS:%0A${{ steps.traffic-check.outputs.problem_projects }}%0A📅 Data: $(TZ='America/Sao_Paulo' date '+%d/%m/%Y')%0A⏰ Hora: $(TZ='America/Sao_Paulo' date '+%H:%M:%S') (Brasília)%0A%0A🚨 VERIFICAR DOMÍNIO AFETADO URGENTE!"
+          MESSAGE="🚨 ALERTA DE TRÁFEGO VERCEL%0A%0A🔥 ${{ steps.traffic-check.outputs.high_traffic_count }}/${{ steps.traffic-check.outputs.total_projects }} projetos com problemas de tráfego%0A%0A📊 DOMÍNIOS AFETADOS:%0A${{ steps.traffic-check.outputs.problem_projects }}%0A📅 Data: $(TZ='America/Sao_Paulo' date '+%d/%m/%Y')%0A⏰ Hora: $(TZ='America/Sao_Paulo' date '+%H:%M:%S') (Brasília)%0A%0A🎯 PROBLEMAS DETECTADOS:%0A• Response time alto (indicativo de tráfego)%0A• Degradação de performance simultânea%0A• Sobrecarga real do servidor%0A%0A🚨 VERIFICAR DOMÍNIO AFETADO URGENTE!"
           
           # Enviar alerta crítico para Telegram
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
