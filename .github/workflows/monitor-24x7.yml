@@ -19,12 +19,12 @@ jobs:
           - name: "rasparei"
             url: "https://rasparei.com/"
             timeout: 10
-          - name: "admin-raspaganha"
-            url: "https://admin.raspaganha.sa.com/"
-            timeout: 15
-          - name: "raspaganha-v2"
-            url: "https://raspaganha-v2.vercel.app/"
-            timeout: 10
+          # - name: "admin-raspaganha"
+          #   url: "https://admin.raspaganha.sa.com/"
+          #   timeout: 15
+          # - name: "raspaganha-v2"
+          #   url: "https://raspaganha-v2.vercel.app/"
+          #   timeout: 10
           # ➕ Adicione seus outros 7+ sites aqui conforme necessário
       fail-fast: false  # Continua testando outros sites mesmo se um falhar
     
