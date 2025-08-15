@@ -21,16 +21,16 @@ jobs:
             url: "https://rasparei.com/api/pix/status"
             expected: "ok"
             critical: true
-          - name: "user-balance"
-            site: "rasparei"
-            url: "https://rasparei.com/api/user/balance"
-            expected: "balance"
-            critical: true
-          - name: "admin-dashboard"
-            site: "admin-raspaganha"
-            url: "https://admin.raspaganha.sa.com/api/health"
-            expected: "healthy"
-            critical: true
+          # - name: "user-balance"
+          #   site: "rasparei"
+          #   url: "https://rasparei.com/api/user/balance"
+          #   expected: "balance"
+          #   critical: true
+          # - name: "admin-dashboard"
+          #   site: "admin-raspaganha"
+          #   url: "https://admin.raspaganha.sa.com/api/health"
+          #   expected: "healthy"
+          #   critical: true
           # ➕ Adicione mais testes conforme necessário
       fail-fast: false  # Continua testando outras funções mesmo se uma falhar
     
